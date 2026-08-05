@@ -55,20 +55,22 @@ def threshold_level(corrected: np.ndarray, cfg: Config) -> float:
 
     Objects are darker than the returned level (`corrected < level`).
 
-    - `"half_max"` (default): estimates the opaque-object core intensity as
-      a low percentile (`cfg.threshold.core_percentile`) of the *dark*
-      pixels, then places the level a fraction
-      (`cfg.threshold.half_max_fraction`) of the way from that core back up
-      to the background level of 1.0. The dark subset is the foreground side
-      of an Otsu split (`corrected < threshold_otsu(corrected)`) rather than
-      a fixed cut like the frame median: under a residual illumination
-      gradient a large share of *background* pixels can fall below the
-      median, which would drag the "core" estimate toward background and
-      inflate the recovered level/area. Otsu locates the object/background
-      valley itself, so the dark subset stays foreground-only regardless of
-      gradient — and regardless of how little of the frame the object
-      covers, which a whole-frame low percentile would otherwise miss
-      entirely.
+    - `"half_max"` (default): defines the object-core pixel set *absolutely*
+      as those darker than `1.0 - cfg.threshold.min_object_depth` (backlit
+      grains are near-opaque, far below the 1.0 background), estimates the
+      core intensity as a low percentile (`cfg.threshold.core_percentile`) of
+      that set, and places the level a fraction
+      (`cfg.threshold.half_max_fraction`) of the way from the core back up to
+      background. An absolute opacity cut — rather than a relative Otsu split
+      — is used deliberately: Otsu *always* partitions the histogram, so on a
+      frame with no real objects it splits the sensor noise and plants the
+      "core" just below background, and even with a few real grains among
+      heavy noise the noise dominates the split; either way the level rides up
+      into the noise and traces hundreds of specks. The absolute cut is also
+      robust to residual illumination gradient (a few-percent background
+      spread never reaches the opacity cut). If fewer than
+      `cfg.detect.min_area_px` pixels are opaque, the frame is treated as
+      object-free and a level below every pixel is returned (detects nothing).
     - `"otsu"`: `skimage.filters.threshold_otsu` on the raw intensities.
 
     Args:
@@ -83,13 +85,15 @@ def threshold_level(corrected: np.ndarray, cfg: Config) -> float:
             `"otsu"`.
     """
     if cfg.threshold.method == "half_max":
-        otsu_split = float(threshold_otsu(corrected))
-        dark = corrected[corrected < otsu_split]
-        # A blank/background-only frame has no pixels below the Otsu split;
-        # fall back to a whole-frame percentile so this can't crash or
-        # divide by an empty selection.
-        percentile_source = dark if dark.size else corrected
-        core = float(np.percentile(percentile_source, cfg.threshold.core_percentile))
+        # Genuinely-opaque object-core pixels, by an absolute cut (see the
+        # docstring for why absolute rather than an Otsu split).
+        opaque = corrected[corrected < 1.0 - cfg.threshold.min_object_depth]
+        # Object-presence gate: fewer than one minimum object's worth of
+        # opaque pixels -> treat the frame as object-free and return a level
+        # below every pixel so `corrected < level` selects nothing.
+        if opaque.size < cfg.detect.min_area_px:
+            return float(corrected.min()) - 1.0
+        core = float(np.percentile(opaque, cfg.threshold.core_percentile))
         return core + cfg.threshold.half_max_fraction * (1.0 - core)
     if cfg.threshold.method == "otsu":
         return float(threshold_otsu(corrected))

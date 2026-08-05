@@ -75,11 +75,20 @@ class ThresholdConfig(_StrictModel):
             range used as the half-max threshold level.
         core_percentile: Dark-pixel percentile used to estimate the opaque
             core intensity for the half-max method.
+        min_object_depth: Fractional darkening below the flat-fielded
+            background (1.0) at or beyond which a pixel counts as opaque
+            object-core. Backlit grains are near-opaque, so a real object
+            contributes many such pixels; an object-free frame has essentially
+            none, even after blank-division amplifies sensor noise. A frame
+            with fewer than ``detect.min_area_px`` opaque pixels is treated as
+            object-free and ``half_max`` returns a level that detects nothing
+            (guards against Otsu tracing noise on empty frames).
     """
 
     method: Literal["half_max", "otsu"]
     half_max_fraction: float
     core_percentile: float
+    min_object_depth: float
 
 
 class DetectConfig(_StrictModel):
