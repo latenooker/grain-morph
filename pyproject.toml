@@ -17,7 +17,7 @@ dependencies = [
   "shapely>=2.0",
   "pyefd>=1.6",
   "wadell_rs @ git+https://github.com/PaPieta/wadell_rs.git",
-  "pandas>=2.0",
+  "pandas>=2.2",
   "pyarrow>=14",
   "imageio>=2.31",
   "typer>=0.12",

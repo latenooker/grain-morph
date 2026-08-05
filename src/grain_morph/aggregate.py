@@ -121,6 +121,11 @@ def _recompute_qc_pass(grains: pd.DataFrame, cfg: Config) -> pd.Series:
     Returns:
         Boolean series, `True` iff none of `cfg.qc.disqualifying_flags` are
         set for that row.
+
+    Raises:
+        KeyError: If any name in `cfg.qc.disqualifying_flags` is not a
+            column of `grains` — a config/data mismatch that should fail
+            loudly rather than be silently treated as "not disqualifying".
     """
     disqualifying = list(cfg.qc.disqualifying_flags)
     if not disqualifying:
@@ -258,6 +263,10 @@ def aggregate_run(grains: pd.DataFrame, cfg: Config) -> dict[str, pd.DataFrame]:
           `(sample_id, camera)`.
         - `"accepted"`: the row subset of `grains` (with `qc_pass`
           recomputed) that passed QC.
+
+    Raises:
+        KeyError: If any name in `cfg.qc.disqualifying_flags` is not a
+            column of `grains` (see :func:`_recompute_qc_pass`).
     """
     working = grains.copy()
     working["qc_pass"] = _recompute_qc_pass(working, cfg)
