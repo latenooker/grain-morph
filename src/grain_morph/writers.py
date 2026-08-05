@@ -2,11 +2,15 @@
 
 Supports the three formats exposed by ``Config.output.format``
 (``"parquet"``, ``"csv"``, ``"feather"``), plus an optional
-``pyarrow.dataset``-partitioned layout for parquet. CSV round-trips lose
-dtype information (everything comes back from disk as text), so
-:func:`read_table` restores the written frame's dtypes for that format —
-without this, a CSV round-trip of a boolean column like ``qc_pass`` would
-come back as the strings ``"True"``/``"False"`` instead of ``bool``.
+``pyarrow.dataset``-partitioned layout for parquet.
+
+Parquet and feather are the **lossless** formats — dtypes (including
+``bool``) round-trip exactly. CSV is a **lossy, text-based inspection
+format** (matching the design doc's "portable/inspectable fallback"):
+everything is written as text, and :func:`read_table` relies on pandas'
+own type inference — plus a narrow, best-effort boolean coercion — to
+recover something close to the original dtypes. See :func:`read_table`
+for the CSV caveats this implies.
 """
 
 from __future__ import annotations
@@ -44,6 +48,10 @@ def _with_extension(path: Path, fmt: str) -> Path:
 def write_table(df: pd.DataFrame, path: Path, fmt: str) -> Path:
     """Write a DataFrame to disk in one of the supported table formats.
 
+    ``fmt="csv"`` writes plain text: it is the portable/inspectable
+    fallback, not a dtype-preserving format (see :func:`read_table`).
+    ``"parquet"`` and ``"feather"`` preserve dtypes exactly.
+
     Args:
         df: Table to write.
         path: Destination path. The correct extension for ``fmt`` is
@@ -72,10 +80,15 @@ def write_table(df: pd.DataFrame, path: Path, fmt: str) -> Path:
 def read_table(path: Path, fmt: str) -> pd.DataFrame:
     """Read a DataFrame previously written by :func:`write_table`.
 
-    For ``fmt="csv"``, columns are coerced back to ``bool``/numeric dtypes
-    where CSV's text round-trip would otherwise leave them as strings
-    (``pandas`` already infers numeric columns; only literal ``"True"``/
-    ``"False"`` columns need an explicit boolean cast).
+    ``"parquet"`` and ``"feather"`` are lossless: the returned frame has
+    exactly the dtypes it was written with. ``fmt="csv"`` is lossy —
+    everything on disk is text, so dtypes are *reconstructed* rather than
+    preserved: numeric columns come back via pandas' own ``read_csv``
+    type inference, and object columns holding only the literal strings
+    ``"True"``/``"False"`` are cast to ``bool`` by :func:`_coerce_bool_columns`
+    (a best-effort heuristic, not a guarantee — see that function's
+    docstring for the ambiguity this accepts). Don't rely on CSV for
+    strict dtype round-tripping; use parquet or feather instead.
 
     Args:
         path: Path to the table file, as returned by :func:`write_table`.
@@ -107,6 +120,19 @@ def _coerce_bool_columns(df: pd.DataFrame) -> pd.DataFrame:
     original ``bool`` dtype for such columns; every other column is left
     untouched.
 
+    This is a deliberately accepted ambiguity, not an oversight: CSV
+    cannot distinguish "a bool column that happened to serialize as
+    True/False" from "a genuine string column whose only two values are
+    the literal words True/False" — both look identical on disk. This
+    function (and, on pandas builds new enough to type-infer bool columns
+    directly in ``read_csv`` — the object-dtype check below is a no-op —
+    pandas itself) resolves that ambiguity in favor of bool, which is
+    correct for this pipeline's actual columns (e.g. ``qc_pass``) but
+    would silently misclassify a hypothetical genuine two-valued string
+    column holding exactly ``{"True", "False"}``. Anything that must
+    survive that edge case losslessly should use parquet or feather
+    instead of CSV.
+
     Args:
         df: DataFrame just read from CSV.
 
@@ -129,14 +155,40 @@ def write_partitioned(
 ) -> None:
     """Write a DataFrame, optionally split into per-group partitions.
 
-    For ``fmt="parquet"`` with ``partition=True``, writes a
-    ``pyarrow.dataset`` hive-style partitioned dataset under ``root``,
-    partitioned by ``partition_cols``. Otherwise (``csv``/``feather``, or
-    ``partition=False``), writes plain files under ``root``: one per
-    distinct combination of ``partition_cols`` values (named by joining
-    those values with ``__``, e.g. ``S1__basic.csv``) when
-    ``partition=True``, or a single file (``data.<ext>``) when
-    ``partition=False``.
+    ``partition=False`` writes a single file (``root/data.<ext>``)
+    regardless of ``fmt``, and ``partition_cols`` is unused.
+
+    When ``partition=True``, the two branches below are **intentionally
+    different layouts**, not just different file-naming schemes — in
+    particular they disagree on whether ``partition_cols`` end up as
+    columns *inside* each file on disk:
+
+    - ``fmt="parquet"``: writes one ``pyarrow.dataset`` hive-style
+      partitioned dataset under ``root`` (via
+      ``pyarrow.dataset.write_dataset``), e.g.
+      ``root/sample_id=S1/camera=basic/part-0.parquet``. The
+      ``partition_cols`` values are encoded **only in the directory
+      path** — each individual part file's own schema does *not*
+      include them. They are reconstructed as columns only when the
+      dataset is read back as a whole, e.g. via
+      ``pandas.read_parquet(root)`` or
+      ``pyarrow.dataset.dataset(root, partitioning="hive")`` — never by
+      reading a single part file directly with
+      :func:`read_table`/``pd.read_parquet`` on one leaf path.
+    - ``fmt="csv"`` / ``fmt="feather"``: writes one flat file per
+      distinct combination of ``partition_cols`` values, named by
+      joining those values with ``__`` (e.g. ``root/S1__basic.csv``).
+      Unlike the parquet case, ``partition_cols`` remain **embedded as
+      ordinary columns inside each file** — there is no separate
+      directory-encoded layer to strip them into, so each file is
+      independently readable (and re-groupable) via
+      :func:`read_table` alone.
+
+    This asymmetry is deliberate: it's the standard hive-partitioned
+    dataset convention for parquet (what most parquet-consuming tools
+    expect), while csv/feather have no equivalent partitioned-dataset
+    reader in pandas, so keeping the partition columns inline is what
+    makes each per-group file self-describing.
 
     Args:
         df: Table to write.
