@@ -255,13 +255,31 @@ rejection breakdown, wall time).
 
 ## 8. Testing
 
-`tests/synth.py` generates synthetic frames with known ground truth (polygons of
-known area/perimeter/AR on a bright background; known multiplicative gradient;
-configurable Gaussian blur for defocus; edge-overlapping polygons; Poisson/
-Gaussian noise). CI runs purely on synthetic data. Opt-in tests run against the
-real frames on `/Volumes/LEXAR` and their `_back` blanks **when present locally**.
+Three test tiers, by purpose:
 
-**Real BMPs are NOT committed** (external volume, multi-MB, tens of GB per run).
+1. **Synthetic (precision, CI).** `tests/synth.py` generates frames with known
+   ground truth (polygons of known area/perimeter/AR on a bright background;
+   known multiplicative gradient; configurable Gaussian blur for defocus;
+   edge-overlapping polygons; Poisson/Gaussian noise). All numeric **acceptance
+   criteria below run here** — only synthetic data has exact ground truth, and
+   only full-resolution edges support sub-1 % area / focus-recall assertions.
+2. **Downsampled real (integration, CI, committed).** A small set of real frames
+   downsampled (anti-aliased, integer factor, target ≲ 300 KB each) committed
+   under `tests/fixtures/real/`: at least one **Basic** + one **Zoom** data
+   frame plus their `_{cam}_back.bmp` blanks. These drive **integration/smoke**
+   tests — filename parsing, blank discovery + pairing, per-camera dispatch,
+   end-to-end `detect → aggregate → report`, correct schema/partitioning, and
+   "grains actually detected". A `tests/fixtures/real/GENERATION.md` records the
+   source path, frame indices, and downsample factor; fixture config scales
+   `um_per_px` by that factor. **Downsampled frames are NOT used for precision
+   or focus-gate assertions** (downsampling degrades the edges those measure).
+3. **Full-res real (opt-in, local only).** Tests that run against the frames on
+   `/Volumes/LEXAR` and their `_back` blanks **when present locally** — the only
+   place the real defocus separation (e.g. the profiled grain G) is validated.
+   Skipped in CI.
+
+**Full-resolution BMPs are NOT committed** (multi-MB, tens of GB per run); only
+the downsampled integration fixtures are.
 
 Acceptance criteria:
 
