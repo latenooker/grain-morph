@@ -1,13 +1,15 @@
-"""Typer CLI: `detect`, `aggregate`, `report`, and `make-fixtures` commands.
+"""Typer CLI: `detect`, `aggregate`, `report`, `overlay`, and `make-fixtures`
+commands.
 
 Thin argument-wiring layer only — every command loads a resolved `Config`
 via `grain_morph.config.load_config` and delegates straight to the
 corresponding library entry point (`pipeline.run_detect`,
-`aggregate.aggregate_run`, `report.make_reports`); no business logic lives
-here. `make-fixtures` is the one exception with real (if small) logic of its
-own — an anti-aliased image downsampler with no library home yet, used by
-Task 16 to build committed integration-test fixtures from full-resolution
-dev data.
+`aggregate.aggregate_run`, `report.make_reports`, `report.make_overlays`);
+no business logic lives here, aside from `overlay`'s own small
+`--frames`-parsing and per-frame contour-file reading (`_read_overlay_
+contours`), and `make-fixtures`'s anti-aliased image downsampler (no
+library home yet), used by Task 16 to build committed integration-test
+fixtures from full-resolution dev data.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from skimage.transform import downscale_local_mean
 from grain_morph.aggregate import aggregate_run
 from grain_morph.config import Config, load_config
 from grain_morph.pipeline import run_detect
-from grain_morph.report import make_reports
+from grain_morph.report import make_overlays, make_reports
 from grain_morph.writers import read_table, write_table
 
 app = typer.Typer(
@@ -34,6 +36,16 @@ app = typer.Typer(
 # `make-fixtures`'s default downsample factor -- a CLI option default, not a
 # pipeline tunable, so it lives here rather than in `configs/default.yaml`.
 _DEFAULT_DOWNSAMPLE_FACTOR = 4
+
+# `overlay`'s default downsample factor. A separate constant from
+# `_DEFAULT_DOWNSAMPLE_FACTOR` above even though both currently default to
+# the same value -- they tune unrelated commands (`make-fixtures`'
+# image-only downsampler vs. `overlay`'s outlines-then-downsample render)
+# and have no reason to be forced to change together.
+_DEFAULT_OVERLAY_FACTOR = 4
+
+# How many available frame ids to show in the "--frames is required" hint.
+_OVERLAY_FRAME_HINT_N = 5
 
 # Mirrors `grain_morph.writers._EXTENSIONS` (and `pipeline._EXTENSIONS`,
 # which duplicates it for the same reason). Duplicated rather than imported
@@ -189,6 +201,118 @@ def report(
         )
         return
     make_reports(grains, frames_dir, out_dir, cfg)
+
+
+def _read_overlay_contours(run_dir: Path, frame_ids: list[str], cfg: Config) -> pd.DataFrame:
+    """Concatenate per-frame contour tables for the requested frames.
+
+    Contours are never partitioned (`pipeline._write_or_clear_contour_frame`
+    always writes `contours/{frame_id}.<ext>`), so each requested frame maps
+    to exactly one candidate file path.
+
+    Args:
+        run_dir: Completed `detect` output directory (has `contours/`).
+        frame_ids: Frame ids (stems) to read contours for.
+        cfg: Resolved pipeline configuration; `cfg.output.format` selects
+            the per-frame contour file's extension.
+
+    Returns:
+        `grain_uid, wkt, um_per_px` rows for every requested frame whose
+        contour file exists; a frame with no contour file (`save_contours`
+        was off for that run, or the frame had zero objects) is silently
+        skipped, not an error. An empty, correctly-columned frame if none
+        of the requested frames have one.
+    """
+    ext = _EXTENSIONS[cfg.output.format]
+    frames = [
+        read_table(path, cfg.output.format)
+        for fid in frame_ids
+        if (path := run_dir / "contours" / f"{fid}{ext}").exists()
+    ]
+    if not frames:
+        return pd.DataFrame(columns=["grain_uid", "wkt", "um_per_px"])
+    return pd.concat(frames, ignore_index=True)
+
+
+@app.command()
+def overlay(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Completed `detect` output directory (has `grains/` + `contours/`)."
+        ),
+    ],
+    frames_dir: Annotated[
+        Path, typer.Argument(help="Directory to search for the source frame images.")
+    ],
+    out_dir: Annotated[
+        Path, typer.Argument(help="Destination directory for overlay PNGs.")
+    ],
+    frames: Annotated[
+        str | None,
+        typer.Option(
+            "--frames",
+            help=(
+                "Required. Comma-separated frame ids (stems) to render, e.g. "
+                "'S1_b_0000001,S1_b_0000002'."
+            ),
+        ),
+    ] = None,
+    factor: Annotated[
+        int,
+        typer.Option("--factor", help="Integer factor to downsample the rendered overlay by."),
+    ] = _DEFAULT_OVERLAY_FACTOR,
+    config: _ConfigOpt = None,
+) -> None:
+    """Render QC-colored polygon-overlay PNGs for explicitly selected frames.
+
+    For each requested frame, draws every detected grain's subpixel
+    polygon outline over its full-resolution source image -- colored by QC
+    outcome -- then downsamples by `factor` (see `report.make_overlays`'
+    docstring for why full-res-then-downsample, rather than the reverse,
+    is what keeps outlines exactly registered to the image).
+
+    Args:
+        run_dir: Completed `detect` output directory; needs `grains/` and,
+            for any frame to actually get outlines drawn, `contours/`
+            (requires that run's `cfg.output.save_contours` to have been
+            `True`).
+        frames_dir: Directory to search for the source frame images.
+        out_dir: Destination directory for every `{frame_id}_overlay.png`
+            (created if missing).
+        frames: Required comma-separated frame ids (stems). Omitted/empty
+            prints a message (including a few available frame ids) and
+            exits non-zero, rather than silently rendering nothing or
+            guessing which frames the caller wanted.
+        factor: Integer factor the full-res composite is downsampled by.
+        config: Optional user config YAML overriding the packaged defaults.
+
+    Raises:
+        typer.Exit: With code 1, if `frames` is omitted or empty.
+    """
+    cfg = load_config(config)
+    grains = _read_grains(run_dir / "grains", cfg)
+    if grains is None:
+        typer.echo(
+            f"No grains found at {run_dir / 'grains'} -- the run detected zero "
+            "objects; nothing to overlay."
+        )
+        return
+
+    frame_ids = [f.strip() for f in frames.split(",")] if frames else []
+    frame_ids = [f for f in frame_ids if f]
+    if not frame_ids:
+        available = sorted(grains["frame_id"].astype(str).unique())[:_OVERLAY_FRAME_HINT_N]
+        hint = f" Available frame ids include: {', '.join(available)}." if available else ""
+        typer.echo(
+            "--frames is required: pass a comma-separated list of frame ids to render."
+            + hint
+        )
+        raise typer.Exit(code=1)
+
+    contours = _read_overlay_contours(run_dir, frame_ids, cfg)
+    paths = make_overlays(grains, contours, frames_dir, out_dir, frame_ids, factor, cfg)
+    typer.echo(f"Wrote {len(paths)} overlay PNG(s) to {out_dir}")
 
 
 def _downsample_image(src: Path, dest: Path, factor: int) -> None:
