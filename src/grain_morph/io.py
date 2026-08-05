@@ -103,10 +103,20 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
     """Recursively discover data frames under ``root`` and pair them to blanks.
 
     Walks ``root`` for files with a known image extension
-    (``_IMAGE_EXTENSIONS``), parses each filename via :func:`parse_name`,
-    and discards files that don't match ``cfg.filename.sample_regex``.
-    Each remaining data (non-blank) frame is paired with the blank frame
-    that shares its ``(sample_id, camera)``, if one was found.
+    (``_IMAGE_EXTENSIONS``), skipping hidden files (name starts with
+    ``.``) -- notably macOS AppleDouble sidecar files (e.g.
+    ``._frame.bmp``), which `Path.rglob` would otherwise happily return
+    and which `sample_regex` can accidentally match (its leading
+    ``.+?`` group readily swallows a ``._`` prefix as part of the
+    sample id), only for image decoding to fail later since the
+    sidecar isn't real image data. These sidecars are routinely written
+    by macOS when copying onto non-HFS+ volumes (e.g. the exFAT
+    external drives this pipeline reads CAMSIZER output from), so this
+    is an expected condition, not a hypothetical one. Each remaining
+    file is parsed via :func:`parse_name`, which discards files that
+    don't match ``cfg.filename.sample_regex``. Each remaining data
+    (non-blank) frame is paired with the blank frame that shares its
+    ``(sample_id, camera)``, if one was found.
 
     Args:
         root: Directory to search recursively for image files.
@@ -117,7 +127,9 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
     """
     root = Path(root)
     paths = sorted(
-        p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS
+        p
+        for p in root.rglob("*")
+        if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in _IMAGE_EXTENSIONS
     )
 
     data_frames: list[tuple[Path, ParsedName]] = []

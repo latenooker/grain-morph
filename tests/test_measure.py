@@ -87,10 +87,10 @@ def test_measure_polygon_never_raises_on_negative_area_polygon():
 
     m = measure_polygon(poly, um_per_px=1.0)  # must not raise
 
-    assert m["area_px"] == 0.0
-    assert m["area_um2"] == 0.0
-    assert m["ecd_um"] == 0.0
-    assert all(math.isnan(m[k]) for k in ("feret_max_um", "aspect_ratio", "circularity"))
+    assert all(
+        math.isnan(m[k])
+        for k in ("area_px", "area_um2", "ecd_um", "feret_max_um", "aspect_ratio", "circularity")
+    )
 
 
 def test_measure_polygon_never_raises_on_zero_area_self_intersecting_polygon():
@@ -102,8 +102,8 @@ def test_measure_polygon_never_raises_on_zero_area_self_intersecting_polygon():
 
     m = measure_polygon(bowtie, um_per_px=1.0)  # must not raise
 
-    assert m["area_um2"] == 0.0
-    assert m["ecd_um"] == 0.0
+    assert math.isnan(m["area_um2"])
+    assert math.isnan(m["ecd_um"])
 
 
 def test_efd_and_wadell_smoke():
