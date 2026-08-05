@@ -17,6 +17,7 @@ from typing import Any
 import pandas as pd
 
 from grain_morph.config import Config
+from grain_morph.writers import read_table, write_table
 
 _IMAGE_EXTENSIONS = (".bmp", ".png", ".tif", ".tiff")
 _MANIFEST_COLUMNS = (
@@ -231,3 +232,44 @@ class Manifest:
             recorded frame.
         """
         return pd.DataFrame(list(self._rows.values()), columns=list(_MANIFEST_COLUMNS))
+
+    def save(self, path: str | Path, fmt: str) -> Path:
+        """Persist the manifest to disk via :func:`grain_morph.writers.write_table`.
+
+        Args:
+            path: Destination path. The correct extension for ``fmt`` is
+                appended if it isn't already present (see
+                :func:`grain_morph.writers.write_table`).
+            fmt: One of ``"parquet"``, ``"csv"``, ``"feather"``.
+
+        Returns:
+            The actual path written.
+        """
+        return write_table(self.to_frame(), Path(path), fmt)
+
+    @classmethod
+    def load(cls, path: str | Path, fmt: str) -> Manifest:
+        """Reconstruct a manifest previously written by :meth:`save`.
+
+        Args:
+            path: Path to the manifest table, as returned by :meth:`save`.
+            fmt: One of ``"parquet"``, ``"csv"``, ``"feather"``.
+
+        Returns:
+            A new :class:`Manifest` whose rows reproduce those in the
+            saved table (``to_frame()`` on the result is equal to
+            ``to_frame()`` on the manifest that was saved).
+        """
+        frame = read_table(Path(path), fmt)
+        manifest = cls()
+        for row in frame.to_dict("records"):
+            manifest.add(
+                str(row["frame_id"]),
+                str(row["frame_path"]),
+                str(row["status"]),
+                int(row["n_objects"]),
+                float(row["seconds"]),
+                str(row["flatfield_method"]),
+                fingerprint=str(row["fingerprint"]),
+            )
+        return manifest
