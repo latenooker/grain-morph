@@ -13,6 +13,7 @@ def _grains():
     return pd.DataFrame({
         "sample_id": ["S1"] * n,
         "camera": ["basic"] * n,
+        "frame_id": ["F1"] * n,
         "ecd_um": rng.uniform(50, 500, n),
         "feret_min_um": rng.uniform(40, 450, n),
         "solidity": rng.uniform(0.9, 1.0, n),

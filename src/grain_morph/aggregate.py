@@ -24,8 +24,7 @@ One function, :func:`aggregate_run`, produces four tables:
   `qc_pass`, for downstream consumers (e.g. `report.py`) that want the
   clean grain table directly rather than re-deriving it.
 - `"per_frame"` — one row per `(sample_id, camera, frame_id)`, with
-  per-flag counts, same columns as `"summary"`; present iff `grains` has a
-  `frame_id` column (always true for the real per-grain table).
+  per-flag counts, same columns as `"summary"`.
 """
 
 from __future__ import annotations
@@ -298,9 +297,7 @@ def aggregate_run(grains: pd.DataFrame, cfg: Config) -> dict[str, pd.DataFrame]:
           recomputed) that passed QC.
         - `"per_frame"`: one row per `(sample_id, camera, frame_id)`, same
           columns as `"summary"` (including per-flag counts), for spotting
-          frame-to-frame drift within a sample/camera. Only present if
-          `grains` has a `frame_id` column (always true for the real
-          per-grain table; some minimal test fixtures omit it).
+          frame-to-frame drift within a sample/camera.
 
     Raises:
         KeyError: If any name in `cfg.qc.disqualifying_flags` is not a
@@ -309,15 +306,9 @@ def aggregate_run(grains: pd.DataFrame, cfg: Config) -> dict[str, pd.DataFrame]:
     working = grains.copy()
     working["qc_pass"] = _recompute_qc_pass(working, cfg)
     accepted = working[working["qc_pass"]].reset_index(drop=True)
-    tables: dict[str, pd.DataFrame] = {
+    return {
         "summary": _build_summary(working),
         "rejection_by_ecd": _build_rejection_by_ecd(working),
         "accepted": accepted,
+        "per_frame": _build_per_frame(working),
     }
-    # The real per-grain table (pipeline.py's row assembly) always has
-    # `frame_id`; some minimal synthetic fixtures used by other tables'
-    # tests do not. Skip `per_frame` rather than raising in that case, same
-    # spirit as `_SHAPE_DESCRIPTOR_COLUMNS` only reporting columns present.
-    if "frame_id" in working.columns:
-        tables["per_frame"] = _build_per_frame(working)
-    return tables
