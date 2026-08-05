@@ -182,10 +182,10 @@ signature:
 - `edge_width_px` -- median 10%-90% intensity-rise distance, sampled along
   outward normals at points around the object boundary. A sharp edge rises
   over a couple of pixels; a defocused edge rises gradually over many more.
-  Flagged when it exceeds `qc.defocus_edge_width_px` (default 3.0 px).
+  Flagged when it exceeds `qc.defocus_edge_width_px` (default 5.25 px).
 - `contrast` -- `(local_background_mean - core_mean) / local_background_mean`,
   from a small eroded core and a dilated ring just outside the object.
-  Flagged when it falls below `qc.defocus_contrast_min` (default 0.90).
+  Flagged when it falls below `qc.defocus_contrast_min` (default 0.70).
 
 An object is flagged defocused if *either* condition trips. If you're seeing
 too many sharp grains flagged, loosen (raise `defocus_edge_width_px` and/or
