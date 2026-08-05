@@ -1,0 +1,50 @@
+# grain-morph default configuration.
+#
+# Every threshold/kernel/parameter the pipeline uses lives here — no magic
+# numbers in source. Copy this file, override only the keys you need, and
+# pass the override to `load_config(path)`; it is deep-merged on top of this
+# packaged default.
+
+calibration:
+  # REQUIRED at run time: microns per pixel, per camera. null -> fail loudly
+  # (Config.um_per_px raises KeyError) until the operator sets a real value.
+  um_per_px: { basic: null, zoom: null }
+
+filename:
+  # Captures sample_id, camera code, and either a frame index or the literal
+  # back-flat token from a frame's filename stem.
+  sample_regex: '(?P<sample>.+?)_(?P<cam>[bz])_(?:(?P<frame>\d+)|back)$'
+  camera_map: { b: basic, z: zoom }
+  back_token: back
+
+flatfield:
+  method: auto # auto | blank | morphological
+  morph_kernel_px: 201
+
+threshold:
+  method: half_max # half_max | otsu
+  half_max_fraction: 0.5
+  core_percentile: 5 # dark-pixel percentile used to estimate opaque core
+
+detect:
+  min_area_px: 25
+  fill_holes: true
+
+measure:
+  efd_order: 15
+  efd_resample_n: 256
+  wadell_smoothing: 1.0
+
+qc:
+  min_ecd_px: 10
+  defocus_edge_width_px: 3.0 # edge_width above this -> defocus
+  defocus_contrast_min: 0.90 # contrast below this -> defocus
+  sliver_aspect_ratio: 3.0
+  sliver_max_ecd_px: 40
+  agglomerate_solidity_max: 0.90
+  disqualifying_flags: [flag_defocus, flag_border, flag_too_small, flag_sliver, flag_no_polygon]
+
+output:
+  format: parquet # parquet | csv | feather
+  save_contours: true
+  partition: true

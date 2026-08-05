@@ -34,8 +34,12 @@ dev = ["pytest>=7.4", "pytest-cov", "ruff>=0.5", "mypy>=1.8", "psutil>=5.9"]
 [project.scripts]
 grain-morph = "grain_morph.cli:app"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["grain_morph", "grain_morph.configs"]
+package-dir = { "grain_morph" = "src/grain_morph", "grain_morph.configs" = "configs" }
+
+[tool.setuptools.package-data]
+"grain_morph.configs" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
