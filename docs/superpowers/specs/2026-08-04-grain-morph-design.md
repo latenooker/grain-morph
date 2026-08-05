@@ -330,3 +330,71 @@ disk). No custom watershed / Fourier / roundness (use libraries). No
 sieve-equivalence or mass-conversion modelling. No cross-camera stitching.
 **Flag, never drop** — every detected object gets a row; rejection is a
 reversible filter at aggregation, never a deletion at detection.
+
+## 11. v0.2 addendum (2026-08-04) — curvature entropy + parallelization
+
+Two requirements added mid-implementation. Both are recorded here as decisions.
+
+### 11.1 Curvature entropy (new morphometric descriptor)
+
+**What:** a scale-free measure of boundary complexity/roughness — the Shannon
+entropy of the distribution of local boundary curvature. A smooth, regular
+outline concentrates curvature in few bins (low entropy); a rough, irregular,
+or crenulated outline spreads curvature across many bins (high entropy). It
+complements the EFD harmonics (frequency-domain) and Wadell roundness
+(corner-scale) with a single distribution-shape scalar, and is cheap.
+
+**Method (decided):**
+1. Take the grain's subpixel exterior ring (the same polygon used everywhere
+   else) and resample it to `measure.curvature_resample_n` evenly-spaced points
+   (closed curve).
+2. Gaussian-smooth the closed coordinate sequences with
+   `measure.curvature_smoothing` (sigma in resampled-point units, `mode="wrap"`)
+   to suppress pixel-quantization noise before differentiating — curvature is a
+   second-derivative quantity and is noise-sensitive; the smoothing scale is a
+   free parameter and **travels with the data as a column**, like
+   `wadell_smoothing`.
+3. Signed curvature κ = (x'y'' − y'x'') / (x'² + y'²)^{3/2} via periodic finite
+   differences (`np.gradient` on the wrapped arrays).
+4. Histogram κ into `measure.curvature_bins` bins; normalize to a probability
+   vector p; `curvature_entropy = −Σ p_i ln p_i / ln(bins)` (normalized to
+   [0, 1] so it is comparable across bin counts). Empty/degenerate boundaries →
+   `NaN`, with `flag_no_polygon` already covering the no-polygon case.
+
+**Columns:** `curvature_entropy` (float, per grain) and `curvature_smoothing`
+(float, the sigma used — travels with the data). Config section under `measure`:
+`curvature_resample_n` (default 256), `curvature_smoothing` (default 2.0),
+`curvature_bins` (default 32). Lives in `measure.py` as
+`measure_curvature_entropy(poly, resample_n, smoothing, bins) -> dict`.
+
+### 11.2 Parallelization (across images)
+
+The architecture is already frame-parallel; this makes it explicit and
+optimized, and sets the standard the whole codebase already meets.
+
+**Decisions:**
+- **Unit of parallelism = one frame.** Frames are fully independent (no shared
+  state); `process_frame(spec, cfg, ...)` is a pure function returning a small,
+  picklable `FrameResult` (lists of dicts + WKT strings). This is already true
+  of every module written (config/io/flatfield/detect/measure/qc are pure
+  per-frame functions with no global mutable state), so no rewrite of Tasks
+  1–11 is needed — the requirement is satisfied by construction and enforced at
+  the pipeline layer.
+- **Never ship images across the process boundary.** Workers receive a
+  `FrameSpec` (paths only), read their own frame + blank from disk, do all
+  compute, and return only small row/geometry dicts. No large array crosses the
+  loky pickle boundary.
+- **Process-based joblib** (`backend="loky"`) over frames. `n_jobs` is
+  configurable (`runtime.n_jobs`, default `-1` = all cores) and overridable via
+  the CLI `--jobs`.
+- **Streaming, memory-bounded.** Consume results as they complete
+  (`joblib.Parallel(return_as="generator")`) and write rows incrementally in
+  chunks (`runtime.chunk_size`) rather than materializing a whole run in RAM —
+  this is what keeps peak RSS bounded (acceptance criterion 8) at tens-of-GB
+  run scale.
+- **No thread oversubscription.** With N worker processes each calling
+  numpy/scipy/skimage (which spawn their own BLAS/OpenMP threads), cap inner
+  threads to 1 per worker via `joblib.parallel_config(inner_max_num_threads=1)`
+  so N processes don't each spawn N threads. No new dependency.
+- The synthetic generator's supersampling (test-only) is not on the production
+  parallel path; its per-object full-frame supersample stays a test concern.
