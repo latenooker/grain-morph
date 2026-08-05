@@ -152,7 +152,8 @@ def detect(
             config value).
         force: Reprocess every frame regardless of the existing manifest.
         overview: After detection, render QC-colored overview PNGs (one per
-            frame with >=1 detection) into OUT/overviews/.
+            frame with >=1 detection) into OUT/overviews/. Outlines require
+            the run's cfg.output.save_contours (default true).
         overview_factor: Integer factor to downsample overview PNGs by.
     """
     cfg = load_config(config)
@@ -175,7 +176,7 @@ def aggregate(
         grains_path: Grains root directory or single grains table file (see
             `_read_grains`).
         out_dir: Destination directory `summary`/`rejection_by_ecd`/
-            `accepted` are written into, as `cfg.output.format`.
+            `accepted`/`per_frame` are written into, as `cfg.output.format`.
         config: Optional user config YAML overriding the packaged defaults.
     """
     cfg = load_config(config)
