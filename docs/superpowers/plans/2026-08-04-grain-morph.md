@@ -946,10 +946,80 @@ git commit -m "feat(writers): parquet/csv/feather write_table + partitioning + m
 
 ---
 
+## Task 11B: Curvature entropy (added v0.2)
+
+**Files:**
+- Modify: `src/grain_morph/measure.py`, `src/grain_morph/config.py`, `configs/default.yaml`
+- Test: `tests/test_measure.py`
+
+**Interfaces:**
+- Consumes: a `shapely.Polygon` exterior ring; new `Config.measure.curvature_*` keys.
+- Produces: `measure_curvature_entropy(poly: shapely.Polygon, resample_n: int, smoothing: float, bins: int) -> dict[str, float]` returning `{"curvature_entropy": float, "curvature_smoothing": float}` (the second echoes the sigma used, so it travels with the data). Adds config keys `measure.curvature_resample_n` (256), `measure.curvature_smoothing` (2.0), `measure.curvature_bins` (32).
+
+Method (see design §11.1): resample the closed exterior ring to `resample_n` even points → Gaussian-smooth the wrapped x/y sequences with `smoothing` (`scipy.ndimage.gaussian_filter1d(..., mode="wrap")`) → signed curvature `k = (x'y'' - y'x'') / (x'^2 + y'^2)**1.5` via periodic `np.gradient` → histogram into `bins` → `entropy = -sum(p*ln p)/ln(bins)` over nonzero p (normalized to [0,1]). Degenerate/too-short ring → `curvature_entropy = float("nan")`.
+
+- [ ] **Step 1: Add config keys.** Add `curvature_resample_n: 256`, `curvature_smoothing: 2.0`, `curvature_bins: 32` to `configs/default.yaml` under `measure:`, and the matching typed fields on `MeasureConfig` in `config.py` (no defaults in code — values live in YAML, per the no-magic-numbers rule).
+
+- [ ] **Step 2: Write failing tests** (append to `tests/test_measure.py`):
+
+```python
+def test_curvature_entropy_smooth_lower_than_rough():
+    import numpy as np
+    import shapely
+    from grain_morph.measure import measure_curvature_entropy
+    smooth = shapely.Point(0, 0).buffer(60, quad_segs=256)  # near-circle
+    # rough: radially perturbed circle
+    theta = np.linspace(0, 2 * np.pi, 400, endpoint=False)
+    r = 60 + 6 * np.sin(11 * theta)
+    rough = shapely.Polygon(np.c_[r * np.cos(theta), r * np.sin(theta)])
+    e_smooth = measure_curvature_entropy(smooth, 256, 2.0, 32)["curvature_entropy"]
+    e_rough = measure_curvature_entropy(rough, 256, 2.0, 32)["curvature_entropy"]
+    assert 0.0 <= e_smooth <= 1.0 and 0.0 <= e_rough <= 1.0
+    assert e_rough > e_smooth  # rough outline spreads curvature -> higher entropy
+    # echoes the smoothing used
+    assert measure_curvature_entropy(smooth, 256, 2.0, 32)["curvature_smoothing"] == 2.0
+
+
+def test_curvature_entropy_degenerate_is_nan():
+    import math
+    import shapely
+    from grain_morph.measure import measure_curvature_entropy
+    tiny = shapely.Polygon([(0, 0), (1, 0), (0, 1)])  # 3 points, degenerate for curvature
+    out = measure_curvature_entropy(tiny, 256, 2.0, 32)
+    assert math.isnan(out["curvature_entropy"])
+```
+
+- [ ] **Step 3: Run to verify fail.** `pytest tests/test_measure.py -k curvature -v` → FAIL.
+- [ ] **Step 4: Implement `measure_curvature_entropy`** in `measure.py` per the method above; reuse the existing boundary-resample helper if one exists, else add a small periodic resampler. Guard `len(coords) < 5` (or zero-length ring) → NaN.
+- [ ] **Step 5: Run to verify pass.** `pytest tests/test_measure.py -k curvature -v` → PASS; then full `pytest` green; `ruff check src tests && mypy src` clean.
+- [ ] **Step 6: Commit.**
+
+```bash
+git add src/grain_morph/measure.py src/grain_morph/config.py configs/default.yaml tests/test_measure.py
+git commit -m "feat(measure): curvature entropy boundary-complexity descriptor"
+```
+
+---
+
 ## Task 12: Detect pipeline orchestration
 
 **Files:**
 - Create: `src/grain_morph/pipeline.py`, `tests/test_pipeline.py`
+
+**Parallelization (v0.2 — design §11.2):** `run_detect` MUST parallelize across
+frames with process-based joblib and be memory-bounded:
+- `joblib.Parallel(n_jobs=n_jobs, backend="loky", return_as="generator")`,
+  consuming `FrameResult`s as they complete and writing rows/contours to disk in
+  chunks of `runtime.chunk_size` — never hold a whole run's rows in RAM.
+- Wrap the parallel section in
+  `with joblib.parallel_config(inner_max_num_threads=1):` so N worker processes
+  don't each spawn N BLAS/OpenMP threads (no oversubscription; no new dep).
+- `process_frame` must stay a **pure, picklable** function: it takes a
+  `FrameSpec` (paths only) + `cfg`, reads its own frame + blank from disk, and
+  returns only small dicts/WKT — never receives or returns a large image array.
+- Add config `runtime.n_jobs` (default `-1` = all cores) and
+  `runtime.chunk_size` (default 200); CLI `--jobs` overrides `runtime.n_jobs`.
+  `n_jobs=1` must still work (tests use it for determinism).
 
 **Interfaces:**
 - Produces:
@@ -957,7 +1027,7 @@ git commit -m "feat(writers): parquet/csv/feather write_table + partitioning + m
   - `run_detect(root, out_dir, cfg, n_jobs=..., force=False) -> None` — discovers frames, skips done (manifest), runs `process_frame` via `joblib.Parallel`, streams rows to `write_partitioned`, writes `contours`, `manifest`, `errors`, `run_config.yaml`, `summary.json`.
 - Consumes: everything from Tasks 4–11.
 
-Row assembly: merge `measure_polygon` + `measure_efd` + `measure_wadell` + `qc_metrics` + `qc_flags` with identity columns (`grain_uid, frame_id, frame_path, sample_id, camera, run, label, centroid_x, centroid_y, um_per_px, wadell_smoothing, pipeline_version, config_hash`). Empty frame → `rows=[]`, still a manifest entry.
+Row assembly: merge `measure_polygon` + `measure_efd` + `measure_wadell` + `measure_curvature_entropy` (→ `curvature_entropy`, `curvature_smoothing`) + `perimeter_crofton_px` (crofton diagnostic column, from the object mask) + `qc_metrics` + `qc_flags` with identity columns (`grain_uid, frame_id, frame_path, sample_id, camera, run, label, centroid_x, centroid_y, um_per_px, wadell_smoothing, pipeline_version, config_hash`). Note the two raster-perimeter helpers from Task 9: `raster_perimeter_px` (chain-code) is used only by the AC5 test; persist `perimeter_crofton_px` (crofton) as the schema's diagnostic column. Empty frame → `rows=[]`, still a manifest entry.
 
 - [ ] **Step 1: Write failing tests `tests/test_pipeline.py`**
 
