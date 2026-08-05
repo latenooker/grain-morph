@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from grain_morph.config import load_config
 from grain_morph.flatfield import apply_flatfield
@@ -41,3 +42,11 @@ def test_morphological_used_when_no_blank():
     # object still darker than corrected background
     assert corrected.min() < 0.6
     assert abs(float(np.median(corrected)) - 1.0) < 0.05
+
+
+def test_forced_blank_method_without_blank_raises():
+    cfg = load_config(None)
+    cfg.flatfield.method = "blank"
+    f = make_frame(size=(128, 128), objects=[], gradient=0.4)
+    with pytest.raises(ValueError, match="requires a blank frame"):
+        apply_flatfield(f.image, None, cfg)

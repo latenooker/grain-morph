@@ -36,8 +36,8 @@ def _estimate_field_morphological(image: np.ndarray, kernel_px: int) -> np.ndarr
         Float32 array, same shape as `image`, holding the estimated
         illumination field.
     """
-    field = ndimage.grey_closing(image.astype(np.float32), size=kernel_px)
-    return field.astype(np.float32)
+    field: np.ndarray = ndimage.grey_closing(image.astype(np.float32), size=kernel_px)
+    return field
 
 
 def _odd_guarded_kernel(kernel_px: int, image_shape: tuple[int, ...]) -> int:
@@ -79,17 +79,35 @@ def apply_flatfield(
         A `(corrected, method_used)` tuple: `corrected` is a float32 array
         normalized so the background is ~1.0, and `method_used` is
         `"blank"` or `"morphological"`.
+
+    Raises:
+        ValueError: If `cfg.flatfield.method == "blank"` but `blank` is
+            `None`.
     """
     image_f32 = image.astype(np.float32)
+    use_blank = cfg.flatfield.method == "blank" or (
+        cfg.flatfield.method == "auto" and blank is not None
+    )
 
-    if cfg.flatfield.method == "blank" or (cfg.flatfield.method == "auto" and blank is not None):
-        field = blank.astype(np.float32)  # type: ignore[union-attr]
+    if use_blank:
+        if blank is None:
+            raise ValueError(
+                "flatfield.method='blank' requires a blank frame, but none was "
+                "provided/paired for this frame"
+            )
+        field = blank.astype(np.float32)
         method_used = "blank"
     else:
         kernel = _odd_guarded_kernel(cfg.flatfield.morph_kernel_px, image.shape)
         field = _estimate_field_morphological(image, kernel)
         method_used = "morphological"
 
+    # Floor the divisor: the backlit background is bright, so a field pixel
+    # can only be near-zero due to a degenerate blank/estimate, never a
+    # legitimate background reading. This avoids a divide-by-near-zero blowup
+    # without introducing a tunable threshold.
+    field = np.maximum(field, 1.0)
     corrected = image_f32 / field
+    corrected = np.clip(corrected, 0.0, None)
     corrected = corrected / float(np.median(corrected))
     return corrected.astype(np.float32), method_used
