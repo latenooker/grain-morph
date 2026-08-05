@@ -3,10 +3,10 @@
 Four kinds of artifact (design doc §7 "QC review artifacts"), by trust level:
 
 1. **Contact sheets** -- grain crops tiled with `grain_uid` + key metrics:
-   one paginated set per disqualifying flag (all rejected grains with that
-   flag), plus one stratified-by-ECD sample of accepted grains. The single
-   most trust-building output: a reviewer can eyeball whether the QC gate is
-   rejecting the right things.
+   one paginated set per `flag_*` column, restricted to grains that were
+   actually rejected (`qc_pass` is `False`), plus one stratified-by-ECD
+   sample of accepted grains. The single most trust-building output: a
+   reviewer can eyeball whether the QC gate is rejecting the right things.
 2. `focus_scatter.png` -- `edge_gradient_norm` vs `contrast`, colored by
    `flag_defocus`, with a threshold line (see `_focus_scatter`'s docstring
    for why only `defocus_contrast_min`, not `defocus_edge_width_px`, is
@@ -198,6 +198,19 @@ def _focus_scatter(grains: pd.DataFrame, out_dir: Path, cfg: Config) -> Path:
     ax.set_xlabel("edge_gradient_norm")
     ax.set_ylabel("contrast")
     ax.set_title("Focus scatter")
+    # flag_defocus is an OR of the contrast threshold plotted here and a
+    # second, unplotted edge_width_px threshold (see this function's
+    # docstring), so a red point can legitimately sit above the threshold
+    # line -- called out so that doesn't read as a plotting bug.
+    ax.text(
+        0.01,
+        0.01,
+        "flag_defocus may also trigger on edge_width_px (not plotted)",
+        transform=ax.transAxes,
+        fontsize=7,
+        color="dimgray",
+        va="bottom",
+    )
     ax.legend(fontsize=8)
     fig.tight_layout()
     out_path = out_dir / "focus_scatter.png"
@@ -391,21 +404,31 @@ def _paginate(rows: pd.DataFrame, page_size: int) -> list[pd.DataFrame]:
 def _contact_sheets_rejected(
     grains: pd.DataFrame, frame_lookup: dict[str, Path], out_dir: Path
 ) -> list[Path]:
-    """One paginated contact-sheet set per `flag_*` column.
+    """One paginated contact-sheet set per `flag_*` column, rejected grains only.
+
+    A grain is "rejected" here iff `qc_pass` is `False` for it -- a flag
+    column set `True` on an otherwise-`qc_pass` grain (e.g. a non-
+    disqualifying flag under the caller's config) is excluded, so a sheet
+    titled `"Rejected: {flag}"` never shows a grain that was in fact
+    accepted.
 
     Args:
-        grains: Per-grain table.
+        grains: Per-grain table; needs `qc_pass`.
         frame_lookup: `{frame_path_value: resolved_path}`.
         out_dir: Destination directory.
 
     Returns:
-        Paths of every sheet actually written -- a flag with zero flagged
-        rows, or whose frames are all unresolvable, contributes none.
+        Paths of every sheet actually written -- `[]` if `qc_pass` is
+        absent; a flag with zero rejected+flagged rows, or whose frames
+        are all unresolvable, contributes none.
     """
+    if "qc_pass" not in grains.columns:
+        return []
+    rejected = ~grains["qc_pass"].astype(bool)
     paths: list[Path] = []
     flag_columns = [c for c in grains.columns if c.startswith("flag_")]
     for flag in flag_columns:
-        flagged = grains[grains[flag].astype(bool)]
+        flagged = grains[grains[flag].astype(bool) & rejected]
         if flagged.empty:
             continue
         for page_num, page in enumerate(_paginate(flagged, _CONTACT_SHEET_MAX_N), start=1):
@@ -439,6 +462,11 @@ def _stratified_sample(accepted: pd.DataFrame, cap: int, n_strata: int, seed: in
         strata = pd.qcut(accepted["ecd_um"], n_strata, duplicates="drop")
         groups = [g for _, g in accepted.groupby(strata, observed=True)]
     except ValueError:
+        groups = []
+    if not groups:
+        # `ecd_um` had too little variation to form any quantile bin --
+        # `pd.qcut` degrades to an all-NaN categorical (zero groups) rather
+        # than raising in this case, so this can't be caught above.
         groups = [accepted]
     per_stratum = max(1, cap // len(groups))
     parts = [
@@ -484,8 +512,11 @@ def _illumination_field(frame_lookup: dict[str, Path], out_dir: Path, cfg: Confi
     the same technique `grain_morph.flatfield._estimate_field_morphological`
     uses, duplicated here since that is a private helper of `flatfield` --
     as a vignetting-diagnostic visualization, regardless of `cfg.flatfield.
-    method`: `make_reports` only has `frame_path` strings, not the paired
-    blank frames a `"blank"`-method run would actually divide by.
+    method`: `make_reports` only has `frame_path` strings, and is not
+    reliably able to re-derive and read the paired blank frame a
+    `"blank"`-method run would actually divide by (e.g. `frames_root` may
+    hold this frame but not its blank, the exact partial-dataset case this
+    module is built to tolerate).
 
     Args:
         frame_lookup: `{frame_path_value: resolved_path}`
@@ -502,7 +533,16 @@ def _illumination_field(frame_lookup: dict[str, Path], out_dir: Path, cfg: Confi
         return None
     path = next(iter(frame_lookup.values()))
     image = _read_grayscale(path)
-    kernel = max(1, min(cfg.flatfield.morph_kernel_px, min(image.shape) - 1))
+    # Odd-guard the kernel size, mirroring `flatfield._odd_guarded_kernel`
+    # (also duplicated rather than imported): `grey_closing` wants an odd
+    # structuring-element size for a centered footprint. A no-op at the
+    # default `morph_kernel_px=201` against any realistically-sized frame;
+    # only matters once `min(image.shape) - 1` actually clamps it down.
+    kernel = min(cfg.flatfield.morph_kernel_px, min(image.shape) - 1)
+    kernel = max(kernel, 1)
+    if kernel % 2 == 0:
+        kernel -= 1
+    kernel = max(kernel, 1)
     field = ndimage.grey_closing(image.astype(np.float32), size=kernel)
 
     fig, ax = plt.subplots(figsize=_FIGSIZE_FIELD)
