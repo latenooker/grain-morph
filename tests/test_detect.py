@@ -78,3 +78,41 @@ def test_small_object_removed_by_min_area():
     )
     _, dets = detect_objects(corrected, cfg)
     assert dets == []
+
+
+def test_area_accurate_on_clean_frame():
+    r = 40
+    corrected, cfg, f = _corrected(
+        [{"kind": "ellipse", "cx": 128, "cy": 128, "a": r, "b": r, "angle": 0.0, "blur_sigma": 0.0}]
+    )
+    _, dets = detect_objects(corrected, cfg)
+    truth = f.objects[0].polygon.area
+    got = dets[0].polygon.area
+    assert abs(got - truth) / truth < 0.01
+
+
+def test_area_accurate_under_residual_gradient():
+    # Regression: an Otsu-based dark-pixel split (not a fixed median cut) is
+    # required so a residual illumination gradient after morphological
+    # flat-fielding doesn't drag the half-max core estimate toward
+    # background and inflate the recovered area.
+    r = 40
+    corrected, cfg, f = _corrected(
+        [
+            {
+                "kind": "ellipse",
+                "cx": 128,
+                "cy": 128,
+                "a": r,
+                "b": r,
+                "angle": 0.0,
+                "blur_sigma": 0.0,
+            }
+        ],
+        gradient=0.2,
+    )
+    _, dets = detect_objects(corrected, cfg)
+    assert len(dets) == 1
+    truth = f.objects[0].polygon.area
+    got = dets[0].polygon.area
+    assert abs(got - truth) / truth < 0.03
