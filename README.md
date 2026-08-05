@@ -99,9 +99,8 @@ An unrecognized key raises immediately (config models forbid extra fields).
 | Key | Description |
 |---|---|
 | `calibration.um_per_px.basic` / `.zoom` | Micrometers per pixel for each camera. Required -- `null` (the default) makes `detect` fail loudly before processing any frame. |
-| `filename.sample_regex` | Regex applied to a frame's filename stem, capturing `sample`, `cam`, and either `frame` (a frame index) or the literal `back_token`. |
+| `filename.sample_regex` | Regex applied to a frame's filename stem, capturing `sample`, `cam`, and either `frame` (a frame index) or the literal `back` (a blank/background frame). |
 | `filename.camera_map` | Maps the single-letter camera code captured by `cam` (default `b`/`z`) to a full camera name (`basic`/`zoom`), matching the keys under `calibration.um_per_px`. |
-| `filename.back_token` | Literal token (default `back`) identifying a blank/background frame in the filename. |
 | `flatfield.method` | `auto` (blank-division when a paired blank exists, else morphological), `blank` (require a blank, error if missing), or `morphological` (grey-closing background estimate from the image itself). |
 | `flatfield.morph_kernel_px` | Structuring-element size (px) for the morphological background estimate. |
 | `threshold.method` | `half_max` (default) or `otsu`. |
@@ -126,7 +125,6 @@ An unrecognized key raises immediately (config models forbid extra fields).
 | `output.save_contours` | Whether subpixel boundary polygons (WKT) are persisted alongside the per-grain measurements. |
 | `output.partition` | Whether parquet output is written hive-partitioned by `(sample_id, camera)`. |
 | `runtime.n_jobs` | Worker processes `joblib.Parallel` uses to process frames (`-1` = all cores). Overridden per call by `--jobs` / `run_detect(n_jobs=...)`. |
-| `runtime.chunk_size` | Grain rows buffered in memory before each incremental write, bounding peak RSS on long runs. |
 
 ## How the QC gate works, and how to tune it
 

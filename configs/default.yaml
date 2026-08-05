@@ -15,7 +15,6 @@ filename:
   # back-flat token from a frame's filename stem.
   sample_regex: '(?P<sample>.+?)_(?P<cam>[bz])_(?:(?P<frame>\d+)|back)$'
   camera_map: { b: basic, z: zoom }
-  back_token: back
 
 flatfield:
   method: auto # auto | blank | morphological
@@ -54,4 +53,3 @@ output:
 
 runtime:
   n_jobs: -1 # -1 = all cores; run_detect(n_jobs=...) / CLI --jobs override this
-  chunk_size: 200 # grain rows buffered before each incremental write

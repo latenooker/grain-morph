@@ -436,7 +436,7 @@ def qc_flags(metrics: dict[str, float | bool], cfg: Config) -> dict[str, bool]:
         "flag_defocus": is_defocused,
         "flag_border": bool(metrics["touches_border"]),
         "flag_too_small": ecd_px < qc.min_ecd_px,
-        "flag_sliver": aspect_ratio > qc.sliver_aspect_ratio and ecd_px < qc.sliver_max_ecd_px,
+        "flag_sliver": aspect_ratio > qc.sliver_aspect_ratio and ecd_px <= qc.sliver_max_ecd_px,
         "flag_possible_agglomerate": solidity < qc.agglomerate_solidity_max,
         "flag_no_polygon": not bool(metrics["has_polygon"]),
     }

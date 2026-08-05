@@ -41,16 +41,14 @@ class FilenameConfig(_StrictModel):
     Attributes:
         sample_regex: Regex applied to a frame's filename stem, capturing
             named groups ``sample``, ``cam``, and either ``frame`` or the
-            literal ``back_token``.
+            literal ``back`` (a blank/background frame).
         camera_map: Single-letter camera code (as captured by ``cam``) ->
             full camera name (matching the keys of
             ``calibration.um_per_px``).
-        back_token: Literal token identifying a blank/background frame.
     """
 
     sample_regex: str
     camera_map: dict[str, str]
-    back_token: str
 
 
 class FlatfieldConfig(_StrictModel):
@@ -171,13 +169,9 @@ class RuntimeConfig(_StrictModel):
         n_jobs: Number of worker processes `joblib.Parallel` uses to
             process frames (`-1` = all cores). `run_detect`'s `n_jobs`
             argument (and the CLI `--jobs` flag) overrides this per call.
-        chunk_size: Number of grain rows buffered in memory before each
-            incremental write, bounding peak RSS on long runs (design doc
-            §11.2) instead of materializing a whole run's rows at once.
     """
 
     n_jobs: int
-    chunk_size: int
 
 
 class Config(_StrictModel):
