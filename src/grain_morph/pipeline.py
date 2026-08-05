@@ -12,9 +12,30 @@ detect`) needs:
 - :func:`run_detect` — discovers frames, skips ones already recorded in
   `manifest` (resume, unless `force=True`), fans `process_frame` out across
   frames with `joblib.Parallel(backend="loky", return_as="generator")`, and
-  streams results to disk in `cfg.runtime.chunk_size`-row chunks rather than
-  accumulating a whole run's rows in memory. Every frame (including ones that
-  raise) gets exactly one manifest entry; nothing ever aborts the whole run.
+  streams each frame's rows to disk **as that frame completes** (one
+  deterministically-named output file per `frame_id`, never accumulated
+  across frames) rather than accumulating a whole run's rows in memory.
+  Every frame (including ones that raise) gets exactly one manifest entry;
+  nothing ever aborts the whole run *except* an unrecoverable whole-run
+  precondition -- an uncalibrated camera among the discovered frames is
+  checked and raised up front, before any frame is dispatched, rather than
+  being caught by `process_frame`'s per-frame isolation and silently turned
+  into a run full of `status="error"` frames.
+
+**Resume/force correctness note:** every frame's grain rows (and, if
+`cfg.output.save_contours`, its contour rows) live at a path determined
+*only* by that frame's identity (`frame_id`, plus `sample_id`/`camera` for
+partitioned parquet) -- never by *when* or *how many times* `run_detect` has
+been called. Reprocessing a frame (via `force=True`, or via resume after
+that frame's file fingerprint changed) overwrites exactly that frame's own
+output, and a frame that now yields zero objects has its stale output file
+deleted. So `pd.read_parquet(out_dir / "grains")` (or the csv/feather
+per-frame files) always reflects exactly the current on-disk frames' current
+detections -- no stale rows left behind by an earlier run, no duplicates
+from re-running. An earlier version of this module wrote each run's chunks
+under a random per-run token that was never cleaned up, which silently
+accumulated duplicate/stale rows across repeated `run_detect` calls; see the
+task-12 fix report for how that was found and fixed.
 
 **Determinism / resume note:** `Manifest.add`'s `seconds` field is always
 persisted as `0.0` here, never the frame's real wall-clock processing time
@@ -29,9 +50,9 @@ not an oversight (see task-12 report).
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import traceback
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,7 +76,7 @@ from grain_morph.measure import (
     perimeter_crofton_px,
 )
 from grain_morph.qc import qc_flags, qc_metrics
-from grain_morph.writers import read_table, write_partitioned, write_table
+from grain_morph.writers import read_table, write_table
 
 # Mirrors `grain_morph.writers._EXTENSIONS`. Duplicated (rather than imported)
 # because that mapping is a private module attribute of `writers` -- this is
@@ -134,20 +155,6 @@ _QC_FLAG_COLUMNS = (
 
 _CONTOUR_COLUMNS = ("grain_uid", "wkt", "um_per_px")
 
-# Directory-partitioned dataset used for both `grains` and `contours`: each
-# `run_detect` call's incremental chunks live in their own subdirectory
-# (`chunk_<run_token>_<i>`) rather than being written directly into
-# `root/...`, because `writers.write_partitioned`/`write_table` always use a
-# fixed on-disk name per call (e.g. parquet's default `part-0.parquet` per
-# partition) -- calling either repeatedly against the *same* root would
-# silently overwrite the previous chunk instead of appending to it. Nesting
-# each chunk in its own subdirectory sidesteps that without needing changes
-# to `writers.py`: `pd.read_parquet(root)` (and any hive-aware reader)
-# reconstructs `partition_cols` from path segments regardless of the extra
-# nesting level, since non-`key=value` segments like `chunk_...` are simply
-# not partition columns.
-_CHUNK_INDEX_WIDTH = 5
-
 
 @dataclass
 class FrameResult:
@@ -211,9 +218,10 @@ def _grain_columns(efd_order: int) -> list[str]:
     """The full, stable per-grain column order for a given config.
 
     Computed directly from `cfg.measure.efd_order` (not from any actual
-    row) so it is identical for every chunk of a run -- including chunks
-    made entirely of empty/`NaN`-filled rows -- which is what lets every
-    chunk be reindexed to one consistent schema before it is written.
+    row) so it is identical for every frame's output file across a run --
+    including a frame whose rows are entirely empty/`NaN`-filled -- which
+    is what lets every frame's rows be reindexed to one consistent schema
+    before they are written.
 
     Args:
         efd_order: `cfg.measure.efd_order`, which determines how many
@@ -236,6 +244,140 @@ def _grain_columns(efd_order: int) -> list[str]:
         + list(_QC_METRIC_COLUMNS)
         + list(_QC_FLAG_COLUMNS)
     )
+
+
+def _grain_leaf_path(
+    grains_dir: Path, fmt: str, partition: bool, sample_id: str, camera: str, frame_id: str
+) -> Path:
+    """Deterministic per-frame output path for one frame's grain rows.
+
+    One frame maps to exactly one path, named by `frame_id` (never by a
+    per-run token or an incrementing counter) -- reprocessing a frame,
+    whether via `force=True` or via resume after that frame's fingerprint
+    changed, always targets and overwrites this exact path, so repeated
+    `run_detect` calls can never leave stale or duplicate rows for that
+    frame lying around under a different, orphaned filename. A prior
+    version of this module named each run's output chunks with a random
+    `uuid4()` token that was never cleaned up, which meant every call's
+    chunks piled up on disk forever and `pd.read_parquet(grains_dir)`
+    silently summed rows across every run that had ever touched
+    `out_dir` -- this is the fix.
+
+    Args:
+        grains_dir: `out_dir / "grains"`.
+        fmt: `cfg.output.format`.
+        partition: `cfg.output.partition`.
+        sample_id: The frame's sample id.
+        camera: The frame's camera.
+        frame_id: The frame's stem.
+
+    Returns:
+        The path (extension included) that this frame's grain rows are
+        written to, or deleted from if the frame now has none.
+    """
+    ext = _EXTENSIONS[fmt]
+    if not partition:
+        return grains_dir / f"{frame_id}{ext}"
+    if fmt == "parquet":
+        # Hive convention (matches `writers.write_partitioned`): partition
+        # columns live only in the directory path, not the leaf filename.
+        return grains_dir / f"sample_id={sample_id}" / f"camera={camera}" / f"{frame_id}{ext}"
+    # csv/feather have no directory-encoded partition layer (writers.py's
+    # own documented convention for those formats): partition columns stay
+    # embedded as columns instead, and the partition key is folded into the
+    # filename alongside `frame_id` so distinct (sample_id, camera) groups
+    # don't collide.
+    return grains_dir / f"{sample_id}__{camera}__{frame_id}{ext}"
+
+
+def _write_or_clear_grain_frame(
+    rows: list[dict[str, Any]],
+    grains_dir: Path,
+    fmt: str,
+    partition: bool,
+    sample_id: str,
+    camera: str,
+    frame_id: str,
+    grain_columns: list[str],
+) -> None:
+    """Write one frame's grain rows to its deterministic path, or clear it.
+
+    Called once per processed frame (never accumulated across frames),
+    which is what keeps a run memory-bounded: at most one frame's rows are
+    ever resident before being flushed to disk. If `rows` is empty (the
+    frame now has zero objects -- e.g. re-run after an edit that removed
+    its only object), any stale file left over from an earlier run is
+    deleted instead of written, so a re-run never leaves orphaned rows.
+
+    Args:
+        rows: This frame's grain row dicts; may be empty.
+        grains_dir: `out_dir / "grains"`.
+        fmt: `cfg.output.format`.
+        partition: `cfg.output.partition`.
+        sample_id: The frame's sample id.
+        camera: The frame's camera.
+        frame_id: The frame's stem.
+        grain_columns: Canonical column order (`_grain_columns`).
+    """
+    path = _grain_leaf_path(grains_dir, fmt, partition, sample_id, camera, frame_id)
+    if not rows:
+        path.unlink(missing_ok=True)
+        return
+    df = pd.DataFrame(rows).reindex(columns=grain_columns)
+    df = df.sort_values("grain_uid").reset_index(drop=True)
+    if partition and fmt == "parquet":
+        df = df.drop(columns=["sample_id", "camera"])
+    write_table(df, path, fmt)
+
+
+def _write_or_clear_contour_frame(
+    contours: list[dict[str, Any]], contours_dir: Path, fmt: str, frame_id: str
+) -> None:
+    """Write one frame's contour rows to its deterministic path, or clear it.
+
+    Mirrors `_write_or_clear_grain_frame`, but contours are never
+    partitioned (design doc §7: a single flat table keyed on `grain_uid`),
+    so the path is just `contours_dir / f"{frame_id}{ext}"`.
+
+    Args:
+        contours: This frame's `{"grain_uid", "wkt", "um_per_px"}` dicts;
+            may be empty.
+        contours_dir: `out_dir / "contours"`.
+        fmt: `cfg.output.format`.
+        frame_id: The frame's stem.
+    """
+    path = contours_dir / f"{frame_id}{_EXTENSIONS[fmt]}"
+    if not contours:
+        path.unlink(missing_ok=True)
+        return
+    df = pd.DataFrame(contours).reindex(columns=list(_CONTOUR_COLUMNS))
+    df = df.sort_values("grain_uid").reset_index(drop=True)
+    write_table(df, path, fmt)
+
+
+def _validate_calibration(specs: list[FrameSpec], cfg: Config) -> None:
+    """Fail loudly, up front, if any discovered frame's camera is uncalibrated.
+
+    Calibration is a whole-run configuration precondition, not per-frame
+    data corruption. Left unchecked here, an uncalibrated camera would
+    only surface inside `process_frame`'s blanket per-frame exception
+    handling -- `cfg.um_per_px(camera)` raising `KeyError` mid-frame -- so
+    the run would exit 0 with a `manifest`/`errors` full of `status=
+    "error"` frames instead of aborting loudly before any work is done.
+    Checked once for every distinct camera among *all* discovered frames
+    (not just ones that still need processing), before `out_dir` is even
+    created.
+
+    Args:
+        specs: Discovered frames (`io.discover_frames`).
+        cfg: Resolved pipeline configuration.
+
+    Raises:
+        KeyError: If any distinct camera among `specs` has no (or a still
+            `null`) `calibration.um_per_px` entry.
+    """
+    for camera in sorted({spec.parsed.camera for spec in specs}):
+        cfg.um_per_px(camera)
 
 
 def _build_row(
@@ -465,24 +607,35 @@ def run_detect(
 ) -> None:
     """Run Stage 1 (detect) over every frame under `root`.
 
-    Discovers frames (`io.discover_frames`), skips ones already recorded
-    in `out_dir`'s manifest with a matching fingerprint (unless
+    Discovers frames (`io.discover_frames`), validates up front that every
+    distinct camera among them is calibrated (`_validate_calibration` --
+    raises before any work starts, rather than letting an uncalibrated
+    camera masquerade as N per-frame errors), skips frames already
+    recorded in `out_dir`'s manifest with a matching fingerprint (unless
     `force=True`), and fans `process_frame` out across the frames that
     still need work with `joblib.Parallel(backend="loky",
     return_as="generator")` -- consuming `FrameResult`s as they complete
-    and streaming grain rows/contours to disk every `cfg.runtime.
-    chunk_size` rows rather than accumulating a whole run's rows in
-    memory (design doc §11.2; this is what bounds peak RSS on long runs).
-    The parallel section runs under `joblib.parallel_config(
+    and immediately writing each completed frame's rows to its own
+    deterministically-named path (`_write_or_clear_grain_frame`/
+    `_write_or_clear_contour_frame`) rather than accumulating a whole
+    run's rows in memory (design doc §11.2; this is what bounds peak RSS
+    on long runs, and what makes reprocessing a frame overwrite exactly
+    that frame's own output instead of appending a duplicate). The
+    parallel section runs under `joblib.parallel_config(
     inner_max_num_threads=1)` so N worker processes don't each also spawn
     their own BLAS/OpenMP threads.
 
+    `force=True` additionally deletes `grains/`, `contours/`, `manifest.
+    <ext>`, and `errors.<ext>` up front, so a forced run is a true clean
+    slate (including correctly dropping output for any frame that existed
+    in an earlier run but no longer does).
+
     Writes, under `out_dir`:
     - `grains/` -- per-grain table (partitioned by `sample_id`, `camera`
-      if `cfg.output.partition`), chunked across subdirectories. Never
-      created if the whole run produced zero rows.
+      if `cfg.output.partition`), one file per frame. Never created if
+      the whole run produced zero rows.
     - `contours/` -- geometry table (WKT + `um_per_px`, keyed on
-      `grain_uid`), chunked the same way, only when
+      `grain_uid`), one file per frame, only when
       `cfg.output.save_contours`.
     - `manifest.<ext>` -- one row per frame (status, object count,
       flatfield method); `seconds` is always persisted as `0.0` so a
@@ -490,13 +643,16 @@ def run_detect(
       docstring).
     - `errors.<ext>` -- one row per frame that raised (`frame_id`,
       `frame_path`, `traceback`), carried forward across resumes for
-      frames that are skipped rather than reprocessed. Not written if
-      there are no errors.
+      frames that are skipped rather than reprocessed. Deleted (not left
+      stale) if this run ends with zero errors; not written at all if
+      there were never any.
     - `run_config.yaml` -- the fully resolved `cfg`.
-    - `summary.json` -- frame/object counts and QC-rejection breakdown
-      (counted only from frames processed *in this call*; a resumed
-      frame's rejection breakdown isn't re-derived from its
-      already-written grain rows -- see task-12 report) plus wall time.
+    - `summary.json` -- frame/object counts (cumulative, from the
+      manifest) and QC-rejection breakdown (counted only from frames
+      processed *in this call* -- a skipped/carried-forward frame's
+      rejection breakdown isn't re-derived from its already-written grain
+      rows, since the manifest doesn't store per-flag detail; see
+      task-12 report) plus wall time.
 
     Args:
         root: Directory to search recursively for frames.
@@ -508,11 +664,21 @@ def run_detect(
             in the calling process (no worker pool), which is what makes
             output deterministic for tests.
         force: If `True`, reprocess every frame regardless of the
-            existing manifest.
+            existing manifest, after clearing all prior run artifacts.
+
+    Raises:
+        KeyError: If any distinct camera among the discovered frames has
+            no (or a still-`null`) calibration entry -- see
+            `_validate_calibration`. Raised before `out_dir` is created or
+            any frame is processed.
     """
     run_start = time.perf_counter()
     root = Path(root)
     out_dir = Path(out_dir)
+
+    specs = discover_frames(root, cfg)
+    _validate_calibration(specs, cfg)  # whole-run precondition; raises loudly, nothing written yet
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     fmt = cfg.output.format
@@ -522,7 +688,16 @@ def run_detect(
     grains_dir = out_dir / "grains"
     contours_dir = out_dir / "contours"
 
-    specs = discover_frames(root, cfg)
+    if force:
+        # A forced run is a true clean slate: without this, a frame that
+        # existed (and was written) in an earlier run but has since been
+        # deleted from `root` would leave its old grain/contour/error rows
+        # behind forever, since nothing would ever reprocess or clear them.
+        shutil.rmtree(grains_dir, ignore_errors=True)
+        shutil.rmtree(contours_dir, ignore_errors=True)
+        manifest_path.unlink(missing_ok=True)
+        errors_path.unlink(missing_ok=True)
+
     frame_infos = [(spec, spec.parsed.stem, frame_fingerprint(spec.path)) for spec in specs]
 
     existing_manifest: Manifest | None = None
@@ -550,39 +725,12 @@ def run_detect(
     pipeline_version = __version__
     cfg_hash_value = config_hash(cfg)
     grain_columns = _grain_columns(cfg.measure.efd_order)
-    chunk_size = cfg.runtime.chunk_size
-    run_token = uuid.uuid4().hex[:8]
 
     new_manifest = Manifest()
     error_rows: list[dict[str, Any]] = []
     status_counts: dict[str, int] = {}
     n_objects_total = 0
     rejection_counts: dict[str, int] = {}
-    pending_rows: list[dict[str, Any]] = []
-    pending_contours: list[dict[str, Any]] = []
-    chunk_counters = {"grains": 0, "contours": 0}
-
-    def flush_grains() -> None:
-        if not pending_rows:
-            return
-        chunk_df = pd.DataFrame(pending_rows).reindex(columns=grain_columns)
-        chunk_df = chunk_df.sort_values("grain_uid").reset_index(drop=True)
-        chunk_name = f"chunk_{run_token}_{chunk_counters['grains']:0{_CHUNK_INDEX_WIDTH}d}"
-        write_partitioned(
-            chunk_df, grains_dir / chunk_name, fmt, ["sample_id", "camera"], cfg.output.partition
-        )
-        chunk_counters["grains"] += 1
-        pending_rows.clear()
-
-    def flush_contours() -> None:
-        if not pending_contours:
-            return
-        chunk_df = pd.DataFrame(pending_contours).reindex(columns=list(_CONTOUR_COLUMNS))
-        chunk_df = chunk_df.sort_values("grain_uid").reset_index(drop=True)
-        chunk_name = f"chunk_{run_token}_{chunk_counters['contours']:0{_CHUNK_INDEX_WIDTH}d}"
-        write_table(chunk_df, contours_dir / chunk_name, fmt)
-        chunk_counters["contours"] += 1
-        pending_contours.clear()
 
     with joblib.parallel_config(backend="loky", inner_max_num_threads=1):
         if todo:
@@ -620,9 +768,22 @@ def run_detect(
                             "traceback": result.error,
                         }
                     )
-                pending_rows.extend(result.rows)
+                # Write (or clear) this frame's own output immediately -- at
+                # most one frame's rows are ever resident in memory, and
+                # reprocessing this frame_id always overwrites exactly its
+                # own prior output (see `_write_or_clear_grain_frame`).
+                _write_or_clear_grain_frame(
+                    result.rows,
+                    grains_dir,
+                    fmt,
+                    cfg.output.partition,
+                    spec.parsed.sample_id,
+                    spec.parsed.camera,
+                    frame_id,
+                    grain_columns,
+                )
                 if cfg.output.save_contours:
-                    pending_contours.extend(result.contours)
+                    _write_or_clear_contour_frame(result.contours, contours_dir, fmt, frame_id)
                 for row in result.rows:
                     for flag_name in cfg.qc.disqualifying_flags:
                         if row.get(flag_name):
@@ -643,14 +804,8 @@ def run_detect(
                 n_objects_total += int(prior["n_objects"])
                 if prior_status == "error" and frame_id in existing_error_rows:
                     error_rows.append(existing_error_rows[frame_id])
-
-            if len(pending_rows) >= chunk_size:
-                flush_grains()
-            if len(pending_contours) >= chunk_size:
-                flush_contours()
-
-        flush_grains()
-        flush_contours()
+                # Not reprocessed -> its existing grain/contour file (if
+                # any) is untouched, exactly as an earlier run left it.
 
     new_manifest.save(manifest_path, fmt)
     if error_rows:
@@ -658,12 +813,25 @@ def run_detect(
             columns=["frame_id", "frame_path", "traceback"]
         )
         write_table(errors_df, errors_path, fmt)
+    else:
+        # No errors this run (e.g. every previously-erroring frame was
+        # fixed and reprocessed) -- don't leave a stale errors table with
+        # rows for frames that no longer error.
+        errors_path.unlink(missing_ok=True)
 
     (out_dir / "run_config.yaml").write_text(yaml.safe_dump(cfg.model_dump(), sort_keys=False))
     summary = {
         "n_frames": len(frame_infos),
         "n_frames_by_status": status_counts,
         "n_objects": n_objects_total,
+        # NOTE: rejection_counts is accumulated only from frames processed
+        # in *this* call (see the todo-branch loop above), not re-derived
+        # from already-written grain rows for skipped/carried-forward
+        # frames -- on a resume that skips most frames, this understates
+        # the true whole-dataset rejection breakdown. summary.json is a
+        # diagnostic artifact only; nothing depends on it being exact
+        # across resumes (unlike `manifest`, which is byte-identical by
+        # construction -- see module docstring).
         "rejection_counts": rejection_counts,
         "wall_seconds": time.perf_counter() - run_start,
     }
