@@ -125,6 +125,21 @@ def detect(
         bool,
         typer.Option("--force", help="Reprocess every frame, clearing prior run artifacts first."),
     ] = False,
+    overview: Annotated[
+        bool,
+        typer.Option(
+            "--overview/--no-overview",
+            help=(
+                "After detection, render QC-colored overview PNGs (one per frame "
+                "with >=1 detection) into OUT/overviews/. Outlines require the run's "
+                "cfg.output.save_contours (default true)."
+            ),
+        ),
+    ] = False,
+    overview_factor: Annotated[
+        int,
+        typer.Option("--overview-factor", help="Integer factor to downsample overview PNGs by."),
+    ] = _DEFAULT_OVERLAY_FACTOR,
 ) -> None:
     """Run Stage 1 detection over every frame under FRAMES_DIR.
 
@@ -136,9 +151,14 @@ def detect(
         jobs: Overrides `cfg.runtime.n_jobs` for this call (`None` keeps the
             config value).
         force: Reprocess every frame regardless of the existing manifest.
+        overview: After detection, render QC-colored overview PNGs (one per
+            frame with >=1 detection) into OUT/overviews/.
+        overview_factor: Integer factor to downsample overview PNGs by.
     """
     cfg = load_config(config)
     run_detect(frames_dir, out_dir, cfg, n_jobs=jobs, force=force)
+    if overview:
+        _write_overviews(out_dir, frames_dir, cfg, overview_factor)
 
 
 @app.command()
