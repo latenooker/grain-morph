@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import shapely
 from shapely.geometry import Polygon
 
@@ -171,3 +172,32 @@ def test_repair_polygon_unrecoverable_degenerate_ring_returns_none():
     # `contour_ok=False` instead of crashing on it.
     collinear = Polygon([(0, 0), (1, 0), (2, 0)])
     assert _repair_polygon(collinear) is None
+
+
+def test_object_free_noise_frame_detects_nothing():
+    # A flat-fielded frame with NO opaque objects -- just sensor noise around
+    # the background level of 1.0 -- must yield zero detections. Otsu always
+    # splits the histogram, so without the object-presence gate it would split
+    # the noise and trace hundreds of specks. Backlit grains are near-opaque,
+    # so a real core sits far below background; pure noise never does.
+    rng = np.random.default_rng(0)
+    corrected = (1.0 + rng.normal(0.0, 0.03, size=(256, 256))).astype(np.float32)
+    cfg = load_config(None)
+    level = threshold_level(corrected, cfg)
+    assert level < float(corrected.min())  # sentinel: selects no foreground
+    _, dets = detect_objects(corrected, cfg)
+    assert dets == []
+
+
+def test_small_object_amid_noise_survives_gate():
+    # The gate must be count-based, not percentile-based: a single small but
+    # genuinely-opaque grain among heavy noise contributes enough opaque
+    # pixels to survive, even though a percentile of the dark subset would be
+    # noise-dominated and average it away.
+    cfg = load_config(None)
+    obj = {"kind": "ellipse", "cx": 128, "cy": 128, "a": 10, "b": 9,
+           "angle": 0.0, "blur_sigma": 0.0}
+    f = make_frame(size=(256, 256), noise_sigma=3.0, objects=[obj])
+    corrected, _ = apply_flatfield(f.image, None, cfg)
+    _, dets = detect_objects(corrected, cfg)
+    assert len(dets) == 1

@@ -24,6 +24,7 @@ threshold:
   method: half_max # half_max | otsu
   half_max_fraction: 0.5
   core_percentile: 5 # dark-pixel percentile used to estimate opaque core
+  min_object_depth: 0.40 # a pixel counts as opaque object-core if >=40% below background (1.0); a frame with fewer than detect.min_area_px such pixels is treated as object-free (guards against tracing amplified sensor noise on empty frames)
 
 detect:
   min_area_px: 25
