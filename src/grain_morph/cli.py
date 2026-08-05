@@ -4,7 +4,7 @@ commands.
 Thin argument-wiring layer only — every command loads a resolved `Config`
 via `grain_morph.config.load_config` and delegates straight to the
 corresponding library entry point (`pipeline.run_detect`,
-`aggregate.aggregate_run`, `report.make_reports`, `report.make_overlays`);
+`aggregate.aggregate_run`, `report.make_reports`, `overlay.make_overlays`);
 no business logic lives here, aside from `overlay`'s own small
 `--frames`-parsing and per-frame contour-file reading (`_read_overlay_
 contours`), and `make-fixtures`'s anti-aliased image downsampler (no
@@ -25,8 +25,9 @@ from skimage.transform import downscale_local_mean
 
 from grain_morph.aggregate import aggregate_run
 from grain_morph.config import Config, load_config
+from grain_morph.overlay import make_overlays
 from grain_morph.pipeline import run_detect
-from grain_morph.report import make_overlays, make_reports
+from grain_morph.report import make_reports
 from grain_morph.writers import read_table, write_table
 
 app = typer.Typer(
@@ -262,13 +263,25 @@ def overlay(
         int,
         typer.Option("--factor", help="Integer factor to downsample the rendered overlay by."),
     ] = _DEFAULT_OVERLAY_FACTOR,
+    labels: Annotated[
+        bool | None,
+        typer.Option(
+            "--labels/--no-labels",
+            help=(
+                "Force per-grain grain_uid labels on/off. Default (omitted) is auto: "
+                "suppressed once a frame has more than overlay._LABEL_COUNT_CAP grains, "
+                "drawn otherwise. Outlines, flag_no_polygon markers, and the title's "
+                "accepted/rejected counts are always drawn regardless of this flag."
+            ),
+        ),
+    ] = None,
     config: _ConfigOpt = None,
 ) -> None:
     """Render QC-colored polygon-overlay PNGs for explicitly selected frames.
 
     For each requested frame, draws every detected grain's subpixel
     polygon outline over its full-resolution source image -- colored by QC
-    outcome -- then downsamples by `factor` (see `report.make_overlays`'
+    outcome -- then downsamples by `factor` (see `overlay.make_overlays`'
     docstring for why full-res-then-downsample, rather than the reverse,
     is what keeps outlines exactly registered to the image).
 
@@ -285,6 +298,10 @@ def overlay(
             exits non-zero, rather than silently rendering nothing or
             guessing which frames the caller wanted.
         factor: Integer factor the full-res composite is downsampled by.
+        labels: Tri-state per-grain label control passed straight to
+            `make_overlays` -- `None` (neither flag given) is "auto"
+            (suppress above the grain-count cap), `--labels` forces them
+            on, `--no-labels` forces them off.
         config: Optional user config YAML overriding the packaged defaults.
 
     Raises:
@@ -311,7 +328,7 @@ def overlay(
         raise typer.Exit(code=1)
 
     contours = _read_overlay_contours(run_dir, frame_ids, cfg)
-    paths = make_overlays(grains, contours, frames_dir, out_dir, frame_ids, factor, cfg)
+    paths = make_overlays(grains, contours, frames_dir, out_dir, frame_ids, factor, cfg, labels)
     typer.echo(f"Wrote {len(paths)} overlay PNG(s) to {out_dir}")
 
 

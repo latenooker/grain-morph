@@ -1,6 +1,6 @@
-"""Tests for `grain_morph.report.make_overlays` and the `overlay` CLI command.
+"""Tests for `grain_morph.overlay.make_overlays` and the `overlay` CLI command.
 
-Built without the full `detect` pipeline for the `report.py`-level tests
+Built without the full `detect` pipeline for the `overlay.py`-level tests
 (a tiny synthetic frame + hand-built `grains`/`contours` DataFrames is
 enough to exercise the rendering logic); the CLI test runs a real (tiny)
 `detect` first, since it needs an on-disk run directory in the exact shape
@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import imageio.v3 as iio
+import matplotlib.axes
 import numpy as np
 import pandas as pd
 import yaml
@@ -19,10 +20,13 @@ from typer.testing import CliRunner
 
 from grain_morph.cli import app
 from grain_morph.config import load_config
-from grain_morph.report import (
+from grain_morph.overlay import (
     _ACCEPTED_COLOR,
+    _LABEL_COUNT_CAP,
+    _NO_POLYGON_MARKER_COLOR_RGB,
     _REJECTED_COLOR,
     _compose_outlines_full_res,
+    _should_draw_labels,
     make_overlays,
 )
 from tests.synth import make_frame
@@ -235,11 +239,146 @@ def test_flag_no_polygon_grain_does_not_crash_and_gets_marker(tmp_path):
 
     assert len(paths) == 1
     assert paths[0].exists()
-    from grain_morph.report import _NO_POLYGON_MARKER_COLOR_RGB
 
     arr = np.asarray(iio.imread(paths[0]))[..., :3].astype(np.int16)
     dist = np.abs(arr - np.array(_NO_POLYGON_MARKER_COLOR_RGB)).sum(axis=-1)
     assert bool(np.any(dist < 40)), "no flag_no_polygon marker color found in saved PNG"
+
+
+def test_malformed_wkt_is_skipped_without_crash(tmp_path):
+    """One grain's WKT is garbage -- its outline is skipped, not a crash,
+    and the other (well-formed) grain's outline still renders."""
+    frame_id = "f1"
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    frame_path = frames_dir / f"{frame_id}.bmp"
+    _write_frame(frame_path)
+
+    grains = _base_grains(frame_id, frame_path)
+    contours = pd.DataFrame({
+        "grain_uid": [f"{frame_id}:1", f"{frame_id}:2"],
+        "wkt": ["NOT A VALID POLYGON WKT", _TRIANGLE_WKT],
+        "um_per_px": [5.0, 5.0],
+    })
+
+    out_dir = tmp_path / "overlays"
+    paths = make_overlays(
+        grains,
+        contours,
+        frames_root=frames_dir,
+        out_dir=out_dir,
+        frame_ids=[frame_id],
+        factor=4,
+        cfg=load_config(None),
+    )
+
+    assert len(paths) == 1
+    assert paths[0].exists()
+    # grain 2 (rejected, well-formed WKT) still gets its outline even though
+    # grain 1 (accepted, malformed WKT) was skipped.
+    arr = np.asarray(iio.imread(paths[0]))[..., :3].astype(np.int16)
+    dist = np.abs(arr - np.array(_REJECTED_COLOR)).sum(axis=-1)
+    assert bool(np.any(dist < 40)), "well-formed grain's outline missing after malformed-WKT skip"
+
+
+# --- Label-count cap (`--labels`/`--no-labels`, `labels: bool | None`) ---
+
+
+def _many_grains(frame_id: str, frame_path: Path | str, n: int) -> pd.DataFrame:
+    """`n` grains for `frame_id`, scattered centroids -- no contours needed
+    since these tests exercise labels, not outlines."""
+    rng = np.random.default_rng(0)
+    return pd.DataFrame({
+        "frame_id": [frame_id] * n,
+        "grain_uid": [f"{frame_id}:{i}" for i in range(n)],
+        "frame_path": [str(frame_path)] * n,
+        "qc_pass": [i % 2 == 0 for i in range(n)],
+        "centroid_x": rng.uniform(10, _FRAME_SIZE - 10, n),
+        "centroid_y": rng.uniform(10, _FRAME_SIZE - 10, n),
+        "flag_no_polygon": [False] * n,
+        "flag_defocus": [i % 2 != 0 for i in range(n)],
+    })
+
+
+def _spy_on_axes_text(monkeypatch) -> list[tuple]:
+    """Patch `matplotlib.axes.Axes.text` to record every call it receives.
+
+    Lets a test assert exactly how many per-grain text labels `_annotate`
+    drew, end-to-end through the public `make_overlays` API, without
+    parsing rendered pixels.
+    """
+    calls: list[tuple] = []
+    original_text = matplotlib.axes.Axes.text
+
+    def spy_text(self, *args, **kwargs):
+        calls.append(args)
+        return original_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "text", spy_text)
+    return calls
+
+
+def test_should_draw_labels_tri_state():
+    assert _should_draw_labels(None, _LABEL_COUNT_CAP) is True
+    assert _should_draw_labels(None, _LABEL_COUNT_CAP + 1) is False
+    assert _should_draw_labels(True, _LABEL_COUNT_CAP + 1) is True
+    assert _should_draw_labels(False, 1) is False
+
+
+def test_labels_suppressed_above_cap_by_default(tmp_path, monkeypatch):
+    frame_id = "f1"
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    frame_path = frames_dir / f"{frame_id}.bmp"
+    _write_frame(frame_path)
+
+    n = _LABEL_COUNT_CAP + 10
+    grains = _many_grains(frame_id, frame_path, n)
+    contours = pd.DataFrame(columns=["grain_uid", "wkt", "um_per_px"])
+    calls = _spy_on_axes_text(monkeypatch)
+
+    out_dir = tmp_path / "overlays"
+    paths = make_overlays(
+        grains,
+        contours,
+        frames_root=frames_dir,
+        out_dir=out_dir,
+        frame_ids=[frame_id],
+        factor=4,
+        cfg=load_config(None),
+        # labels omitted -> default None -> auto, suppressed above the cap
+    )
+
+    assert len(paths) == 1
+    assert calls == [], "per-grain labels should be suppressed by default above the cap"
+
+
+def test_labels_true_forces_labels_on_above_cap(tmp_path, monkeypatch):
+    frame_id = "f1"
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    frame_path = frames_dir / f"{frame_id}.bmp"
+    _write_frame(frame_path)
+
+    n = _LABEL_COUNT_CAP + 10
+    grains = _many_grains(frame_id, frame_path, n)
+    contours = pd.DataFrame(columns=["grain_uid", "wkt", "um_per_px"])
+    calls = _spy_on_axes_text(monkeypatch)
+
+    out_dir = tmp_path / "overlays"
+    paths = make_overlays(
+        grains,
+        contours,
+        frames_root=frames_dir,
+        out_dir=out_dir,
+        frame_ids=[frame_id],
+        factor=4,
+        cfg=load_config(None),
+        labels=True,
+    )
+
+    assert len(paths) == 1
+    assert len(calls) == n, "labels=True should force a label for every grain regardless of cap"
 
 
 # --- CLI --------------------------------------------------------------
@@ -297,3 +436,10 @@ def test_overlay_cli_missing_frames_option_gives_clear_message(tmp_path):
     assert res.exit_code != 0
     assert "--frames" in res.output
     assert not overlay_out.exists()
+
+
+def test_overlay_cli_help_lists_tristate_labels_flag():
+    res = runner.invoke(app, ["overlay", "--help"])
+    assert res.exit_code == 0
+    assert "--labels" in res.output
+    assert "--no-labels" in res.output
