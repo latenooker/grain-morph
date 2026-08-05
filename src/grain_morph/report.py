@@ -26,6 +26,12 @@ per-grain table itself, so those two are always produced.
 
 Uses matplotlib with the non-interactive `Agg` backend so it renders
 headless (CI, a server with no display).
+
+A fifth artifact, `{frame_id}_overlay.png`, lives in the separate
+`grain_morph.overlay` module (`make_overlays`) rather than here: unlike
+everything above, it's an explicitly-frame-selected visualization rather
+than part of `make_reports`'s always-run set, and was split out once this
+module grew past the ~250-line-per-module guideline.
 """
 
 from __future__ import annotations

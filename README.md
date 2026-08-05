@@ -85,7 +85,21 @@ frames that are new, changed, or missing from the manifest (`--force`
 reprocesses everything from a clean slate). Add `--jobs N` to override
 `runtime.n_jobs` for one run.
 
-A fourth command, `grain-morph make-fixtures SRC DEST --factor N`,
+```bash
+# Optional: render selected frames' grain polygons over the image, colored
+# by QC outcome, downsampled for a compact PNG
+grain-morph overlay OUT FRAMES OUT/overlays --frames S1_b_0000001,S1_b_0000002
+```
+
+`overlay` renders each requested frame's detected-grain polygon outlines
+over its source image -- green for QC-accepted, red for rejected -- then
+downsamples by `--factor` (default 4). Outlines are drawn at full
+resolution and only *then* downsampled (never the reverse), so they stay
+exactly registered to the image regardless of `--factor`. `--frames` is
+required (a comma-separated list of frame ids/stems); there is no "render
+every frame" default.
+
+A fifth command, `grain-morph make-fixtures SRC DEST --factor N`,
 anti-aliased-downsamples a directory of frames by an integer factor
 (filenames preserved) -- used to build the small committed test fixtures
 under `tests/fixtures/real/`; not part of the analysis pipeline itself.
