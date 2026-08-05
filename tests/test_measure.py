@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+import pytest
 import shapely
+from skimage.draw import disk
 
 from grain_morph.config import load_config
 from grain_morph.detect import detect_objects
@@ -62,3 +65,51 @@ def test_efd_and_wadell_smoke():
     w = measure_wadell(circle, smoothing=1.0)
     assert 0.0 < w["wadell_roundness"] <= 1.2
     assert 0.0 < w["wadell_sphericity"] <= 1.2
+
+
+def test_measure_wadell_uses_largest_component_not_first_label():
+    # FIX ROUND 1, item 1: a stray fragment that appears *earlier* in
+    # connected-component scan order than the true main blob must not be
+    # picked instead of it.
+    from grain_morph.measure import measure_wadell
+
+    main = shapely.Point(0, 0).buffer(30, quad_segs=64)
+    stray = shapely.Point(0, -45).buffer(1.2, quad_segs=16)
+    # A sub-pixel-wide bridge keeps `combo` one valid simple Polygon (no
+    # self-intersection) while its *rasterization* still fragments into
+    # two disconnected components: the bridge's x-extent is chosen so it
+    # never straddles an integer raster column, so no raster pixel along
+    # its length is ever filled. The stray blob sits at smaller row
+    # indices (more negative y) than the main blob, so it is labeled
+    # first in `skimage.measure.label`'s (row-major) scan order — picking
+    # connected-component list index 0 without an explicit largest-area
+    # check would silently grab the ~5 px stray fragment instead of the
+    # ~2800 px main blob.
+    bridge = shapely.Polygon([(0.35, -29.0), (0.65, -29.0), (0.65, -44.5), (0.35, -44.5)])
+    combo = shapely.union_all([main, stray, bridge])
+    assert isinstance(combo, shapely.Polygon)  # one simple polygon, not a MultiPolygon
+
+    combo_result = measure_wadell(combo, smoothing=1.0)
+    clean_result = measure_wadell(main, smoothing=1.0)
+
+    assert combo_result["wadell_roundness"] == pytest.approx(
+        clean_result["wadell_roundness"], abs=0.05
+    )
+    assert combo_result["wadell_sphericity"] == pytest.approx(
+        clean_result["wadell_sphericity"], abs=0.05
+    )
+
+
+def test_perimeter_crofton_px_smoke():
+    # FIX ROUND 1, item 2
+    from grain_morph.measure import perimeter_crofton_px
+
+    r = 50
+    mask = np.zeros((2 * r + 20, 2 * r + 20), dtype=bool)
+    rr, cc = disk((r + 10, r + 10), r, shape=mask.shape)
+    mask[rr, cc] = True
+
+    crofton = perimeter_crofton_px(mask)
+    truth = 2 * math.pi * r
+    assert math.isfinite(crofton)
+    assert abs(crofton - truth) / truth < 0.03

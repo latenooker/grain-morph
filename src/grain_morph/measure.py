@@ -19,6 +19,10 @@ produced by :mod:`grain_morph.detect` (or an analytic/test polygon):
   (see its own docstring for why this, not `perimeter_crofton`, is used),
   for comparison against the (shorter, more accurate) subpixel polygon
   perimeter.
+- :func:`perimeter_crofton_px` — the more accurate Crofton raster
+  perimeter estimator, persisted separately as a discrepancy diagnostic
+  (design doc §5) rather than used for the `raster_perimeter_px`
+  comparison above.
 
 `wadell_rs` API (confirmed by reading its installed source, since its
 `__init__.py` exports nothing — see `common.py`, `roundness.py`,
@@ -114,22 +118,58 @@ def _rasterize_polygon(poly: Polygon, pad: int = _RASTER_PAD_PX) -> np.ndarray:
     return mask
 
 
-def _largest_region(mask: np.ndarray) -> Any:
-    """Return the largest-area `regionprops` region in a boolean mask.
+def _largest_component(mask: np.ndarray) -> tuple[Any, np.ndarray]:
+    """Label a boolean mask's connected components and isolate the largest.
 
     Rasterization of a valid simple polygon should yield exactly one
-    connected component; taking the largest guards against stray
-    single-pixel fragments at self-touching or near-degenerate boundaries.
+    connected component; taking the largest guards every raster-based
+    consumer (regionprops here, `wadell_rs` in `measure_wadell`) against
+    stray fragments at self-touching or near-degenerate boundaries (e.g.
+    a few disconnected pixels at a thin neck) being silently treated as
+    *the* object instead of the true main blob. Connected-component
+    labeling is in scan order, not area order, so picking `label == 1`
+    (or list index `0` from any per-label output) is not safe on its own.
+
+    Args:
+        mask: Boolean (or 0/1) mask with at least one foreground pixel.
+
+    Returns:
+        A `(region, component_mask)` tuple: the largest-area
+        `skimage.measure.regionprops` region (`RegionProperties`; not a
+        publicly exported type, hence `Any`), and a same-shape boolean
+        mask containing only that region's pixels.
+    """
+    labeled = sk_label(mask.astype(np.uint8))
+    regions = regionprops(labeled)
+    largest = max(regions, key=lambda r: r.area)
+    return largest, labeled == largest.label
+
+
+def _largest_region(mask: np.ndarray) -> Any:
+    """Return the largest-area `regionprops` region in a boolean mask.
 
     Args:
         mask: Boolean mask with at least one foreground pixel.
 
     Returns:
-        The `skimage.measure.regionprops` region (`RegionProperties`; not
-        a publicly exported type, hence `Any`) with the largest `area`.
+        The largest-area `RegionProperties` (see `_largest_component`).
     """
-    regions = regionprops(sk_label(mask.astype(np.uint8)))
-    return max(regions, key=lambda r: r.area)
+    region, _ = _largest_component(mask)
+    return region
+
+
+def _largest_component_mask(mask: np.ndarray) -> np.ndarray:
+    """Return a mask keeping only the largest connected component of `mask`.
+
+    Args:
+        mask: Boolean mask with at least one foreground pixel.
+
+    Returns:
+        Same-shape boolean mask, `True` only within the largest-area
+        connected component (see `_largest_component`).
+    """
+    _, component_mask = _largest_component(mask)
+    return component_mask
 
 
 def _feret_max_px(hull_coords: np.ndarray) -> float:
@@ -318,6 +358,14 @@ def measure_wadell(poly: Polygon, smoothing: float) -> dict[str, float]:
     boundary smoothing (see `_WADELL_MAX_DEV_THRESH` etc. above for the
     other, fixed knobs).
 
+    The raster is restricted to its largest connected component
+    (`_largest_component_mask`) before labeling: `wadell_rs.common.
+    characterize_objects` labels in scan order, not area order, so
+    `[0]` on its output is only safe to index once the raster is known
+    to hold a single object — otherwise a stray fragment at a
+    self-touching or near-degenerate boundary could silently become the
+    object roundness/sphericity are computed from.
+
     Args:
         poly: Object boundary polygon.
         smoothing: Boundary-smoothing strength passed through to
@@ -326,7 +374,7 @@ def measure_wadell(poly: Polygon, smoothing: float) -> dict[str, float]:
     Returns:
         Dict with keys `wadell_roundness`, `wadell_sphericity`.
     """
-    mask = _rasterize_polygon(poly)
+    mask = _largest_component_mask(_rasterize_polygon(poly))
     label_img = sk_label(mask.astype(np.uint8))
     dist_img = edt.edt(mask)
     obj_dict = wadell_common.characterize_objects(label_img, dist_img)[0]
@@ -380,3 +428,25 @@ def raster_perimeter_px(mask: np.ndarray) -> float:
         The chain-code perimeter estimate, in pixels.
     """
     return float(_largest_region(mask).perimeter)
+
+
+def perimeter_crofton_px(mask: np.ndarray) -> float:
+    """Crofton perimeter of a binary object mask's largest connected component.
+
+    This is the `perimeter_crofton` estimator named in the brief for
+    `raster_perimeter_px` — kept here as its own function instead,
+    since (per `raster_perimeter_px`'s docstring) it doesn't reliably
+    satisfy this module's polygon-vs-raster acceptance test, but it *is*
+    the accurate raster perimeter diagnostic the design doc's persisted
+    schema calls for (`perimeter_crofton_px`, §5: "regionprops, for
+    discrepancy diagnostics") — e.g. flagging objects whose polygon and
+    raster perimeters disagree by more than expected.
+
+    Args:
+        mask: Boolean (or 0/1) object mask; only its largest connected
+            component is used (see `_largest_component`).
+
+    Returns:
+        The Crofton perimeter estimate, in pixels.
+    """
+    return float(_largest_region(mask).perimeter_crofton)
