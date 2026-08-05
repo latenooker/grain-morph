@@ -27,3 +27,82 @@ def test_detect_cli_end_to_end(tmp_path):
     assert res.exit_code == 0, res.output
     assert (out / "summary.json").exists()
     assert (out / "run_config.yaml").exists()
+
+
+def _detect_with_no_objects(tmp_path):
+    """Run `detect` on a frame set with zero detected objects.
+
+    Both the blank and the sole data frame are plain, uniform-background
+    renders (no ``objects``) -- a realistic "nothing here" capture (e.g. a
+    blank-only sample, or a calibration batch with no particles) -- so
+    `run_detect` writes a manifest/summary but never creates `out_dir /
+    "grains"` (see `pipeline.run_detect`'s docstring).
+
+    Args:
+        tmp_path: Pytest `tmp_path` fixture of the calling test.
+
+    Returns:
+        `(out_dir, config_path)`.
+    """
+    run = tmp_path / "run"
+    run.mkdir()
+    iio.imwrite(run / "S1_b_back.bmp", make_frame(size=(128, 128), objects=[]).image)
+    iio.imwrite(run / "S1_b_0000001.bmp", make_frame(size=(128, 128), objects=[]).image)
+    cfg = tmp_path / "c.yaml"
+    calibration = {"calibration": {"um_per_px": {"basic": 5.0, "zoom": 1.0}}}
+    cfg.write_text(yaml.safe_dump(calibration))
+    out = tmp_path / "out"
+    args = ["detect", str(run), str(out), "--config", str(cfg), "--jobs", "1"]
+    res = runner.invoke(app, args)
+    assert res.exit_code == 0, res.output
+    assert not (out / "grains").exists()
+    return out, cfg
+
+
+def test_aggregate_cli_on_zero_grains_exits_cleanly(tmp_path):
+    out, cfg = _detect_with_no_objects(tmp_path)
+    agg_out = tmp_path / "agg"
+    args = ["aggregate", str(out / "grains"), str(agg_out), "--config", str(cfg)]
+    res = runner.invoke(app, args)
+    assert res.exit_code == 0, res.output
+    assert "No grains found" in res.output
+    assert not agg_out.exists()
+
+
+def test_report_cli_on_zero_grains_exits_cleanly(tmp_path):
+    out, cfg = _detect_with_no_objects(tmp_path)
+    rep_out = tmp_path / "rep"
+    frames_dir = tmp_path / "run"
+    args = ["report", str(out / "grains"), str(frames_dir), str(rep_out), "--config", str(cfg)]
+    res = runner.invoke(app, args)
+    assert res.exit_code == 0, res.output
+    assert "No grains found" in res.output
+    assert not rep_out.exists()
+
+
+def test_aggregate_cli_on_csv_grains_directory(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    iio.imwrite(run / "S1_b_back.bmp", make_frame(size=(128, 128), objects=[]).image)
+    objects = [
+        {"kind": "ellipse", "cx": 64, "cy": 64, "a": 18, "b": 18, "angle": 0.0, "blur_sigma": 0.0}
+    ]
+    iio.imwrite(run / "S1_b_0000001.bmp", make_frame(size=(128, 128), objects=objects).image)
+    cfg = tmp_path / "c.yaml"
+    cfg_dict = {
+        "calibration": {"um_per_px": {"basic": 5.0, "zoom": 1.0}},
+        "output": {"format": "csv"},
+    }
+    cfg.write_text(yaml.safe_dump(cfg_dict))
+    out = tmp_path / "out"
+    detect_args = ["detect", str(run), str(out), "--config", str(cfg), "--jobs", "1"]
+    res = runner.invoke(app, detect_args)
+    assert res.exit_code == 0, res.output
+    assert (out / "grains").is_dir()
+
+    agg_out = tmp_path / "agg"
+    agg_args = ["aggregate", str(out / "grains"), str(agg_out), "--config", str(cfg)]
+    res2 = runner.invoke(app, agg_args)
+    assert res2.exit_code == 0, res2.output
+    assert (agg_out / "summary.csv").exists()
+    assert (agg_out / "accepted.csv").exists()

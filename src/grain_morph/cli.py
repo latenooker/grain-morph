@@ -35,25 +35,58 @@ app = typer.Typer(
 # pipeline tunable, so it lives here rather than in `configs/default.yaml`.
 _DEFAULT_DOWNSAMPLE_FACTOR = 4
 
+# Mirrors `grain_morph.writers._EXTENSIONS` (and `pipeline._EXTENSIONS`,
+# which duplicates it for the same reason). Duplicated rather than imported
+# because that mapping is a private module attribute of `writers` -- this is
+# the one place `cli.py` needs to predict a grains-directory's per-frame
+# file extension before globbing for it.
+_EXTENSIONS = {"parquet": ".parquet", "csv": ".csv", "feather": ".feather"}
 
-def _read_grains(path: Path, cfg: Config) -> pd.DataFrame:
+
+def _read_grains(path: Path, cfg: Config) -> pd.DataFrame | None:
     """Load a per-grain table from either a grains root or a single file.
+
+    A `detect` run that found zero objects never creates `out_dir /
+    "grains"` at all (see `pipeline.run_detect`'s docstring) -- an ordinary,
+    valid outcome (a blank-only sample, a mis-pointed frames dir, a
+    calibration batch with no particles), not an error. This returns `None`
+    for that case (a missing `path`, or a grains directory with no per-frame
+    table files under it) rather than raising, so callers can print a clear
+    message and exit cleanly instead of a `FileNotFoundError` traceback.
 
     Args:
         path: A grains root directory (e.g. `out_dir / "grains"` from a
-            `detect` run), read whole via `pandas.read_parquet` -- which
-            transparently unions every part file, hive-partitioned or not;
-            or a single table file, read via `grain_morph.writers.
-            read_table` using `cfg.output.format`.
+            `detect` run), or a single table file.
         cfg: Resolved pipeline configuration; `cfg.output.format` selects
-            the format `read_table` assumes when `path` is a single file.
+            which per-frame file extension a grains-root directory is
+            globbed for, and which format a single file is read as.
 
     Returns:
-        The loaded per-grain table.
+        The loaded per-grain table, or `None` if `path` doesn't exist or is
+        a directory with no matching per-frame table files under it.
     """
-    if path.is_dir():
+    if not path.exists():
+        return None
+    fmt = cfg.output.format
+    if not path.is_dir():
+        return read_table(path, fmt)
+    if fmt == "parquet":
+        # `pandas.read_parquet` on a directory transparently unions every
+        # part file under it, hive-partitioned or not -- the one format
+        # whose leaf files may *not* carry `sample_id`/`camera` as columns
+        # of their own (see `writers.write_partitioned`'s docstring), so
+        # only a whole-directory read reconstructs them.
+        if not any(path.rglob(f"*{_EXTENSIONS[fmt]}")):
+            return None
         return pd.read_parquet(path)
-    return read_table(path, cfg.output.format)
+    # csv/feather grains directories are always a flat set of per-frame
+    # files that each already carry every column (including `sample_id`/
+    # `camera`) inline -- `pipeline._grain_leaf_path` never drops them for
+    # these formats -- so unioning them is a plain per-file read + concat.
+    files = sorted(path.rglob(f"*{_EXTENSIONS[fmt]}"))
+    if not files:
+        return None
+    return pd.concat([read_table(f, fmt) for f in files], ignore_index=True)
 
 
 _ConfigOpt = Annotated[
@@ -114,6 +147,12 @@ def aggregate(
     """
     cfg = load_config(config)
     grains = _read_grains(grains_path, cfg)
+    if grains is None:
+        typer.echo(
+            f"No grains found at {grains_path} -- the run detected zero "
+            "objects; nothing to aggregate."
+        )
+        return
     tables = aggregate_run(grains, cfg)
     for name, table in tables.items():
         write_table(table, out_dir / name, cfg.output.format)
@@ -143,6 +182,12 @@ def report(
     """
     cfg = load_config(config)
     grains = _read_grains(grains_path, cfg)
+    if grains is None:
+        typer.echo(
+            f"No grains found at {grains_path} -- the run detected zero "
+            "objects; nothing to report."
+        )
+        return
     make_reports(grains, frames_dir, out_dir, cfg)
 
 
