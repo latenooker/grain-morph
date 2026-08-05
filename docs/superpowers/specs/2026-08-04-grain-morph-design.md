@@ -226,7 +226,18 @@ distance-transform + watershed on flagged objects and marks products with
 
 `grain_uid` is deterministic: `f"{frame_id}:{label}"` (frame_id = filename stem).
 
-**Per-grain Parquet** (partition by `sample_id`, then `camera`), one row per
+**Output format is configurable.** `output.format` selects the tabular writer
+for the per-grain table, geometry table, and aggregates: **`parquet` (default)**,
+`csv`, or `feather`. Parquet is recommended (columnar, partitioned, typed);
+`csv` is the portable/inspectable fallback; `feather` for fast round-trips. A
+single `write_table(df, path, fmt)` helper centralizes this so no module hard-
+codes a format. `sample_id`/`camera` **partitioning applies to Parquet only**;
+for `csv`/`feather` the same split is expressed as one file per partition
+(`{sample_id}__{camera}.csv`). Geometry WKT survives all three formats. Run
+artifacts stay fixed: `run_config.yaml` (YAML), `summary.json` (JSON);
+`manifest`/`errors` follow `output.format`.
+
+**Per-grain table** (partition by `sample_id`, then `camera`), one row per
 detected object, always:
 
 ```
