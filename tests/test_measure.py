@@ -113,3 +113,30 @@ def test_perimeter_crofton_px_smoke():
     truth = 2 * math.pi * r
     assert math.isfinite(crofton)
     assert abs(crofton - truth) / truth < 0.03
+
+
+def test_curvature_entropy_smooth_lower_than_rough():
+    import numpy as np
+    import shapely
+
+    from grain_morph.measure import measure_curvature_entropy
+    smooth = shapely.Point(0, 0).buffer(60, quad_segs=256)  # near-circle
+    theta = np.linspace(0, 2 * np.pi, 400, endpoint=False)
+    r = 60 + 6 * np.sin(11 * theta)  # radially perturbed -> rough outline
+    rough = shapely.Polygon(np.c_[r * np.cos(theta), r * np.sin(theta)])
+    e_smooth = measure_curvature_entropy(smooth, 256, 2.0, 32)["curvature_entropy"]
+    e_rough = measure_curvature_entropy(rough, 256, 2.0, 32)["curvature_entropy"]
+    assert 0.0 <= e_smooth <= 1.0 and 0.0 <= e_rough <= 1.0
+    assert e_rough > e_smooth  # rough outline spreads curvature -> higher entropy
+    assert measure_curvature_entropy(smooth, 256, 2.0, 32)["curvature_smoothing"] == 2.0
+
+
+def test_curvature_entropy_degenerate_is_nan():
+    import math
+
+    import shapely
+
+    from grain_morph.measure import measure_curvature_entropy
+    tiny = shapely.Polygon([(0, 0), (1, 0), (0, 1)])
+    out = measure_curvature_entropy(tiny, 256, 2.0, 32)
+    assert math.isnan(out["curvature_entropy"])

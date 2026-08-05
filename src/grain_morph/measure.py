@@ -51,6 +51,7 @@ from typing import Any
 import edt
 import numpy as np
 import pyefd
+from scipy.ndimage import gaussian_filter1d
 from shapely.affinity import translate
 from shapely.geometry import Polygon
 from skimage.draw import polygon as sk_polygon
@@ -59,6 +60,14 @@ from skimage.measure import regionprops
 from wadell_rs import common as wadell_common
 from wadell_rs import roundness as wadell_roundness
 from wadell_rs import sphericity as wadell_sphericity
+
+# Below this many resampled boundary points, curvature (a second-derivative
+# quantity) cannot be reliably estimated by finite differences; below this
+# many coordinates, `_resample_boundary` itself has nothing meaningful to
+# interpolate between. `measure_curvature_entropy` reports NaN rather than
+# raising in either case (see its docstring for the full degenerate-input
+# contract).
+_CURVATURE_MIN_RING_COORDS = 5
 
 # Padding (px) added around a polygon's bounding box before rasterizing it,
 # so the filled mask has background on all sides (regionprops/boundary
@@ -450,3 +459,74 @@ def perimeter_crofton_px(mask: np.ndarray) -> float:
         The Crofton perimeter estimate, in pixels.
     """
     return float(_largest_region(mask).perimeter_crofton)
+
+
+def measure_curvature_entropy(
+    poly: Polygon, resample_n: int, smoothing: float, bins: int
+) -> dict[str, float]:
+    """Compute the Shannon entropy of a boundary's local curvature distribution.
+
+    A smooth, regular outline concentrates signed curvature into a few
+    histogram bins (low entropy); a rough, crenulated outline spreads it
+    across many bins (high entropy) — a scale-free distribution-shape
+    scalar that complements the EFD harmonics (`measure_efd`) and Wadell
+    roundness (`measure_wadell`) with one summary of boundary irregularity.
+
+    The exterior ring is resampled to `resample_n` arc-length-even points
+    (`_resample_boundary`, shared with `measure_efd`), then the wrapped
+    x/y sequences are Gaussian-smoothed (`smoothing` sigma, periodic
+    `mode="wrap"`) — curvature is a noise-sensitive second-derivative
+    quantity, so smoothing before differentiating is required — and
+    differentiated with periodic finite differences (`np.gradient`) to
+    get signed curvature `k = (x1*y2 - y1*x2) / (x1**2 + y1**2)**1.5`
+    (the denominator is guarded against zero). `k` is histogrammed into
+    `bins` bins and normalized to a probability vector `p`; the reported
+    entropy is `-sum(p_i * ln p_i)` over the nonzero `p_i`, divided by
+    `ln(bins)` so the result lands in `[0, 1]` and is comparable across
+    bin counts.
+
+    Args:
+        poly: Object boundary polygon.
+        resample_n: Number of boundary points to resample to before
+            differentiating.
+        smoothing: Gaussian smoothing sigma (in resampled-point units)
+            applied to the boundary coordinates before differentiating.
+        bins: Number of histogram bins used to estimate the curvature
+            distribution.
+
+    Returns:
+        Dict with keys `curvature_entropy` (in `[0, 1]`, or `NaN` for a
+        degenerate/too-short ring — never raises) and
+        `curvature_smoothing` (echoes `smoothing`, since it is a free
+        parameter that must travel with the data as a column, like
+        `wadell_smoothing`).
+    """
+    ring_coords = np.asarray(poly.exterior.coords)
+    degenerate = (
+        len(ring_coords) < _CURVATURE_MIN_RING_COORDS
+        or poly.exterior.length == 0.0
+        or bool(np.all(np.isnan(ring_coords)))
+    )
+    if not degenerate:
+        points = _resample_boundary(poly, resample_n)
+        x = gaussian_filter1d(points[:, 0], sigma=smoothing, mode="wrap")
+        y = gaussian_filter1d(points[:, 1], sigma=smoothing, mode="wrap")
+
+        x1 = np.gradient(x)
+        y1 = np.gradient(y)
+        x2 = np.gradient(x1)
+        y2 = np.gradient(y1)
+
+        denom = (x1**2 + y1**2) ** 1.5
+        safe_denom = np.where(denom > 0.0, denom, 1.0)
+        curvature = np.where(denom > 0.0, (x1 * y2 - y1 * x2) / safe_denom, 0.0)
+
+        hist, _ = np.histogram(curvature, bins=bins)
+        total = int(hist.sum())
+        if total > 0:
+            p = hist / total
+            nonzero_p = p[p > 0.0]
+            entropy = float(-np.sum(nonzero_p * np.log(nonzero_p)) / math.log(bins))
+            return {"curvature_entropy": entropy, "curvature_smoothing": float(smoothing)}
+
+    return {"curvature_entropy": float("nan"), "curvature_smoothing": float(smoothing)}

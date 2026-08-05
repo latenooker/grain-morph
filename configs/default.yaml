@@ -34,6 +34,9 @@ measure:
   efd_order: 15
   efd_resample_n: 256
   wadell_smoothing: 1.0
+  curvature_resample_n: 256
+  curvature_smoothing: 2.0
+  curvature_bins: 32
 
 qc:
   min_ecd_px: 10

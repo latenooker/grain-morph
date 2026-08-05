@@ -105,11 +105,21 @@ class MeasureConfig(_StrictModel):
             before computing EFDs.
         wadell_smoothing: Smoothing factor applied before Wadell
             roundness/circularity estimation.
+        curvature_resample_n: Number of points the boundary is resampled
+            to before computing curvature entropy.
+        curvature_smoothing: Gaussian smoothing sigma (in resampled-point
+            units) applied to the boundary before differentiating for
+            curvature entropy.
+        curvature_bins: Number of histogram bins used to estimate the
+            curvature distribution for curvature entropy.
     """
 
     efd_order: int
     efd_resample_n: int
     wadell_smoothing: float
+    curvature_resample_n: int
+    curvature_smoothing: float
+    curvature_bins: int
 
 
 class QCConfig(_StrictModel):
