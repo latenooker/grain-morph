@@ -12,10 +12,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+import pandas as pd
 
 from grain_morph.config import Config
 
 _IMAGE_EXTENSIONS = (".bmp", ".png", ".tif", ".tiff")
+_MANIFEST_COLUMNS = (
+    "frame_id",
+    "frame_path",
+    "fingerprint",
+    "status",
+    "n_objects",
+    "seconds",
+    "flatfield_method",
+)
 
 
 @dataclass(frozen=True)
@@ -128,3 +140,94 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
     ]
     specs.sort(key=lambda s: (s.parsed.sample_id, s.parsed.camera, s.parsed.frame_index))
     return specs
+
+
+def frame_fingerprint(path: Path) -> str:
+    """Compute a cheap, stable fingerprint for a frame file.
+
+    Combines file size and (truncated) modification time from
+    ``path.stat()`` so that resume logic can detect whether a frame has
+    changed on disk since it was last processed, without hashing file
+    contents.
+
+    Args:
+        path: Path to the frame image file.
+
+    Returns:
+        A ``"{size}:{int(mtime)}"`` string.
+    """
+    stat = path.stat()
+    return f"{stat.st_size}:{int(stat.st_mtime)}"
+
+
+class Manifest:
+    """In-memory record of per-frame processing results, keyed by frame ID.
+
+    Used to support resumable pipeline runs: a frame is considered done
+    only if it was previously recorded *and* its stored fingerprint still
+    matches the current one (see :meth:`is_done`).
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty manifest."""
+        self._rows: dict[str, dict[str, Any]] = {}
+
+    def add(
+        self,
+        frame_id: str,
+        frame_path: str | Path,
+        status: str,
+        n_objects: int,
+        seconds: float,
+        flatfield_method: str,
+        *,
+        fingerprint: str,
+    ) -> None:
+        """Record (or overwrite) the processing result for a frame.
+
+        Args:
+            frame_id: Unique identifier for the frame (typically its
+                filename stem).
+            frame_path: Path to the frame's image file.
+            status: Outcome of processing (e.g. ``"ok"``, ``"error"``).
+            n_objects: Number of objects detected in the frame.
+            seconds: Wall-clock processing time, in seconds.
+            flatfield_method: Name of the flatfield correction method used.
+            fingerprint: Value from :func:`frame_fingerprint` for
+                ``frame_path`` at the time it was processed.
+        """
+        self._rows[frame_id] = {
+            "frame_id": frame_id,
+            "frame_path": str(frame_path),
+            "fingerprint": fingerprint,
+            "status": status,
+            "n_objects": n_objects,
+            "seconds": seconds,
+            "flatfield_method": flatfield_method,
+        }
+
+    def is_done(self, frame_id: str, fingerprint: str) -> bool:
+        """Check whether a frame has already been processed and is unchanged.
+
+        Args:
+            frame_id: Frame identifier to look up.
+            fingerprint: Current fingerprint of the frame's file, from
+                :func:`frame_fingerprint`.
+
+        Returns:
+            ``True`` if ``frame_id`` is recorded and its stored fingerprint
+            equals ``fingerprint``; ``False`` otherwise (including when
+            ``frame_id`` is unknown).
+        """
+        row = self._rows.get(frame_id)
+        return row is not None and row["fingerprint"] == fingerprint
+
+    def to_frame(self) -> pd.DataFrame:
+        """Materialize the manifest as a :class:`pandas.DataFrame`.
+
+        Returns:
+            A DataFrame with columns ``frame_id, frame_path, fingerprint,
+            status, n_objects, seconds, flatfield_method``, one row per
+            recorded frame.
+        """
+        return pd.DataFrame(list(self._rows.values()), columns=list(_MANIFEST_COLUMNS))
