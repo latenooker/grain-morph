@@ -164,6 +164,22 @@ class OutputConfig(_StrictModel):
     partition: bool
 
 
+class RuntimeConfig(_StrictModel):
+    """Execution/parallelization settings for `grain_morph.pipeline.run_detect`.
+
+    Attributes:
+        n_jobs: Number of worker processes `joblib.Parallel` uses to
+            process frames (`-1` = all cores). `run_detect`'s `n_jobs`
+            argument (and the CLI `--jobs` flag) overrides this per call.
+        chunk_size: Number of grain rows buffered in memory before each
+            incremental write, bounding peak RSS on long runs (design doc
+            §11.2) instead of materializing a whole run's rows at once.
+    """
+
+    n_jobs: int
+    chunk_size: int
+
+
 class Config(_StrictModel):
     """Fully resolved, validated grain-morph pipeline configuration.
 
@@ -176,6 +192,7 @@ class Config(_StrictModel):
         measure: Morphometry settings.
         qc: Quality-control thresholds.
         output: Output table settings.
+        runtime: Execution/parallelization settings.
     """
 
     calibration: CalibrationConfig
@@ -186,6 +203,7 @@ class Config(_StrictModel):
     measure: MeasureConfig
     qc: QCConfig
     output: OutputConfig
+    runtime: RuntimeConfig
 
     def um_per_px(self, camera: str) -> float:
         """Look up the calibrated micrometers-per-pixel scale for a camera.

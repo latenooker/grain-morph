@@ -51,3 +51,7 @@ output:
   format: parquet # parquet | csv | feather
   save_contours: true
   partition: true
+
+runtime:
+  n_jobs: -1 # -1 = all cores; run_detect(n_jobs=...) / CLI --jobs override this
+  chunk_size: 200 # grain rows buffered before each incremental write
