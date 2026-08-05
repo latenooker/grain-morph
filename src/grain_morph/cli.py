@@ -235,6 +235,36 @@ def _read_overlay_contours(run_dir: Path, frame_ids: list[str], cfg: Config) -> 
     return pd.concat(frames, ignore_index=True)
 
 
+def _write_overviews(run_dir: Path, frames_dir: Path, cfg: Config, factor: int) -> None:
+    """Render QC-colored overview PNGs for every frame with a detection.
+
+    A main-process post-`detect` pass (never inside the parallel
+    `process_frame` workers): reads the just-written grains + contours and
+    calls :func:`grain_morph.overlay.make_overlays` for every distinct
+    `frame_id` present (which, since only detected grains are stored, is
+    exactly the set of frames with at least one detection). Outlines are only
+    drawn where per-frame contour files exist, i.e. when the run had
+    `cfg.output.save_contours` true (default).
+
+    Args:
+        run_dir: Completed `detect` output directory (has `grains/` and,
+            for outlines, `contours/`).
+        frames_dir: Directory to search for the source frame images.
+        cfg: Resolved pipeline configuration.
+        factor: Integer factor the full-res composite is downsampled by.
+    """
+    grains = _read_grains(run_dir / "grains", cfg)
+    if grains is None:
+        typer.echo("No grains detected; nothing to overlay.")
+        return
+    frame_ids = sorted(grains["frame_id"].astype(str).unique())
+    contours = _read_overlay_contours(run_dir, frame_ids, cfg)
+    paths = make_overlays(
+        grains, contours, frames_dir, run_dir / "overviews", frame_ids, factor, cfg, labels=None
+    )
+    typer.echo(f"Wrote {len(paths)} overview PNG(s) to {run_dir / 'overviews'}")
+
+
 @app.command()
 def overlay(
     run_dir: Annotated[
