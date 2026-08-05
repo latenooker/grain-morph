@@ -33,6 +33,24 @@ pip install -e ".[dev]"   # + pytest, ruff, mypy, psutil
 Either path installs the `grain-morph` console script (`grain_morph.cli:app`,
 built with Typer).
 
+## Testing / development
+
+With the dev extras installed (`uv sync --extra dev` or
+`pip install -e ".[dev]"`):
+
+```bash
+pytest                        # run the test suite
+ruff check src tests          # lint
+mypy src                      # type-check
+```
+
+The opt-in tests in `tests/test_realdata_optin.py` are marked `realdata`
+and exercise full-resolution frames from an external drive
+(`/Volumes/LEXAR/Camsizer/PPX/...`); they skip automatically whenever that
+path isn't present, so a plain `pytest` run is safe on any machine. To
+exclude them explicitly (e.g. if the drive happens to be mounted but you
+don't want the extra runtime), run `pytest -m "not realdata"`.
+
 ## Quickstart
 
 Every command reads a config via `--config` (deep-merged on top of the
