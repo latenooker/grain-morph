@@ -39,8 +39,8 @@ measure:
 
 qc:
   min_ecd_px: 10
-  defocus_edge_width_px: 3.0 # edge_width above this -> defocus
-  defocus_contrast_min: 0.90 # contrast below this -> defocus
+  defocus_edge_width_px: 5.25 # edge_width above this -> defocus (tuned on labeled OK_sand/P_01/P_17 grains; see docs/followups.md)
+  defocus_contrast_min: 0.70 # contrast below this -> defocus (demoted to an extreme-debris catch; edge_width is the primary focus signal)
   sliver_aspect_ratio: 3.0
   sliver_max_ecd_px: 40
   agglomerate_solidity_max: 0.90
