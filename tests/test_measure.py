@@ -5,10 +5,11 @@ import math
 import numpy as np
 import pytest
 import shapely
+from shapely.geometry import Polygon
 from skimage.draw import disk
 
 from grain_morph.config import load_config
-from grain_morph.detect import detect_objects
+from grain_morph.detect import _repair_polygon, detect_objects
 from grain_morph.flatfield import apply_flatfield
 from grain_morph.measure import measure_polygon, raster_perimeter_px
 from tests.synth import make_frame
@@ -53,6 +54,56 @@ def test_polygon_perimeter_lower_than_raster():
     truth = f.objects[0].polygon.length
     assert poly_perim < raster_perim
     assert abs(poly_perim - truth) < abs(raster_perim - truth)
+
+
+def test_measure_polygon_on_repaired_oversized_hole_is_positive():
+    # Regression: an invalid polygon with a mis-associated/oversized hole
+    # (real failure mode 2, see test_detect.py) must, once repaired by
+    # `detect.py`'s `_repair_polygon`, measure to a positive area/ecd --
+    # not the negative/garbage area the raw invalid polygon would give.
+    shell = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    oversized_hole = [(-5, -5), (15, -5), (15, 15), (-5, 15)]
+    invalid = Polygon(shell, [oversized_hole])
+    repaired = _repair_polygon(invalid)
+    assert repaired is not None
+
+    m = measure_polygon(repaired, um_per_px=1.0)
+    assert m["area_um2"] > 0.0
+    assert m["ecd_um"] > 0.0
+
+
+def test_measure_polygon_never_raises_on_negative_area_polygon():
+    # Defensive layer: even an *unrepaired* invalid polygon with negative
+    # `.area` (the exact input that used to raise `ValueError: math
+    # domain error` out of the ecd `math.sqrt`, and would otherwise also
+    # crash rasterization's `_largest_region` on an empty region list)
+    # must not raise -- `detect.py` is expected to repair or discard such
+    # polygons before they reach `measure_polygon` in the real pipeline,
+    # but this function must never crash on one regardless.
+    shell = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    oversized_hole = [(-5, -5), (15, -5), (15, 15), (-5, 15)]
+    poly = Polygon(shell, [oversized_hole])
+    assert poly.area < 0.0  # precondition: this is the negative-area case
+
+    m = measure_polygon(poly, um_per_px=1.0)  # must not raise
+
+    assert m["area_px"] == 0.0
+    assert m["area_um2"] == 0.0
+    assert m["ecd_um"] == 0.0
+    assert all(math.isnan(m[k]) for k in ("feret_max_um", "aspect_ratio", "circularity"))
+
+
+def test_measure_polygon_never_raises_on_zero_area_self_intersecting_polygon():
+    # Same defensive contract as above, for real failure mode 1 (a
+    # self-intersecting exterior ring, whose raw `.area` shapely reports
+    # as exactly 0 rather than negative).
+    bowtie = Polygon([(0, 0), (10, 10), (10, 0), (0, 10)])
+    assert bowtie.area == 0.0
+
+    m = measure_polygon(bowtie, um_per_px=1.0)  # must not raise
+
+    assert m["area_um2"] == 0.0
+    assert m["ecd_um"] == 0.0
 
 
 def test_efd_and_wadell_smoke():

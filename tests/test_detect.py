@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import shapely
+from shapely.geometry import Polygon
+
 from grain_morph.config import load_config
-from grain_morph.detect import detect_objects, threshold_level
+from grain_morph.detect import _repair_polygon, detect_objects, threshold_level
 from grain_morph.flatfield import apply_flatfield
 from tests.synth import make_frame
 
@@ -116,3 +119,55 @@ def test_area_accurate_under_residual_gradient():
     truth = f.objects[0].polygon.area
     got = dets[0].polygon.area
     assert abs(got - truth) / truth < 0.03
+
+
+def test_repair_polygon_valid_polygon_passes_through_unchanged():
+    # Already-valid, positive-area polygons must be returned as-is: the
+    # 1%-area accuracy tests rely on valid polygons measuring unchanged.
+    valid = shapely.Point(0, 0).buffer(10, quad_segs=16)
+    assert _repair_polygon(valid) is valid
+
+
+def test_repair_polygon_self_intersecting_exterior_is_repaired():
+    # Real failure mode 1: a coarse downsampled marching-squares trace can
+    # self-intersect (a "bowtie" ring). shapely reports its raw `.area`
+    # as 0 for this case (the two lobes' signed areas cancel), which
+    # would otherwise reach `measure_polygon` as a spuriously-empty
+    # object instead of the true ~50-unit combined outline.
+    bowtie = Polygon([(0, 0), (10, 10), (10, 0), (0, 10)])
+    assert not bowtie.is_valid
+    assert bowtie.area == 0.0
+
+    repaired = _repair_polygon(bowtie)
+
+    assert repaired is not None
+    assert repaired.is_valid
+    assert repaired.area > 0.0
+
+
+def test_repair_polygon_oversized_hole_is_repaired():
+    # Real failure mode 2: a mis-associated / oversized interior ring
+    # (from `_assign_rings_to_labels` grabbing a neighboring object's
+    # contour) drives `exterior_area - hole_area` negative -- this is
+    # exactly what later makes `measure_polygon`'s `math.sqrt` raise
+    # `ValueError: math domain error` if it isn't repaired first.
+    shell = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    oversized_hole = [(-5, -5), (15, -5), (15, 15), (-5, 15)]
+    poly = Polygon(shell, [oversized_hole])
+    assert not poly.is_valid
+    assert poly.area < 0.0
+
+    repaired = _repair_polygon(poly)
+
+    assert repaired is not None
+    assert repaired.is_valid
+    assert repaired.area > 0.0
+
+
+def test_repair_polygon_unrecoverable_degenerate_ring_returns_none():
+    # A ring with no interior at all (collinear points) has nothing for
+    # `make_valid` to recover a polygonal component from -- it should be
+    # dropped (`None`), not raise, so the caller can flag the detection
+    # `contour_ok=False` instead of crashing on it.
+    collinear = Polygon([(0, 0), (1, 0), (2, 0)])
+    assert _repair_polygon(collinear) is None

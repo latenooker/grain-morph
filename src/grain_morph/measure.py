@@ -250,9 +250,42 @@ def measure_polygon(poly: Polygon, um_per_px: float) -> dict[str, float]:
         Dict with keys `area_px, area_um2, ecd_um, feret_max_um,
         feret_min_um, major_axis_um, minor_axis_um, perimeter_um,
         aspect_ratio, solidity, convexity, circularity, extent,
-        eccentricity, orientation`.
+        eccentricity, orientation`. If `poly.area` is non-positive (an
+        invalid/degenerate polygon that reached this function despite
+        `detect.py`'s repair -- not expected in normal operation, but
+        guarded rather than trusted), `area_px`/`area_um2`/`ecd_um` are
+        `0.0` and every shape descriptor is `NaN`, rather than raising.
     """
     area_px = float(poly.area)
+    if area_px <= 0.0:
+        # An interior "hole" ring larger than its exterior drives
+        # `poly.area` negative (`math.sqrt` of the resulting negative
+        # `area_um2` would raise `ValueError: math domain error`), and a
+        # self-intersecting/collapsed ring can drive it to exactly zero,
+        # which starves the rasterization below of any foreground pixel
+        # (`_largest_region` would then raise on an empty region list).
+        # `detect.py` repairs or discards such polygons before they ever
+        # reach here, so this is a belt-and-suspenders guard, not the
+        # primary fix -- but it means this function itself can never
+        # raise on a bad-area polygon, regardless of caller.
+        return {
+            "area_px": 0.0,
+            "area_um2": 0.0,
+            "ecd_um": 0.0,
+            "feret_max_um": float("nan"),
+            "feret_min_um": float("nan"),
+            "major_axis_um": float("nan"),
+            "minor_axis_um": float("nan"),
+            "perimeter_um": float("nan"),
+            "aspect_ratio": float("nan"),
+            "solidity": float("nan"),
+            "convexity": float("nan"),
+            "circularity": float("nan"),
+            "extent": float("nan"),
+            "eccentricity": float("nan"),
+            "orientation": float("nan"),
+        }
+
     area_um2 = area_px * um_per_px**2
     ecd_um = 2.0 * math.sqrt(area_um2 / math.pi)
 

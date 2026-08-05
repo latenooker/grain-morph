@@ -15,8 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import shapely
 from scipy import ndimage
-from shapely.geometry import Polygon
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from skimage.filters import threshold_otsu
 from skimage.measure import find_contours, label, regionprops
 
@@ -31,12 +32,15 @@ class Detection:
         label: Connected-component label id in the returned label image.
         polygon: Subpixel boundary polygon (exterior ring plus any interior
             holes), or `None` if no contour could be associated with this
-            label.
+            label, or if the associated contour was invalid and
+            unrecoverable (see `_repair_polygon`). Always a valid,
+            positive-area `Polygon` when not `None`.
         mask_bbox: Pixel bounding box `(min_row, min_col, max_row, max_col)`
             from `skimage.measure.regionprops`, `max_row`/`max_col`
             exclusive.
         centroid_xy: Pixel-mask centroid as `(x, y)` = `(col, row)`.
-        contour_ok: `True` if `polygon` was successfully recovered.
+        contour_ok: `True` if `polygon` was successfully recovered (and,
+            if necessary, repaired into a valid polygon).
     """
 
     label: int
@@ -171,6 +175,52 @@ def _polygon_with_holes(rings: list[Polygon]) -> Polygon:
     return Polygon(exterior.exterior.coords, holes=holes)
 
 
+def _repair_polygon(poly: Polygon) -> Polygon | None:
+    """Repair a self-intersecting or negative-area polygon via `make_valid`.
+
+    On coarse/downsampled real frames, `_polygon_with_holes` can combine
+    an exterior ring and its assigned interior rings into an invalid
+    `Polygon` two ways: a self-intersecting exterior ring (from a coarse
+    marching-squares trace), which drives `poly.area` to `0` or an
+    incorrect value; or an interior "hole" ring that is mis-associated /
+    oversized relative to its exterior, which drives `poly.area`
+    (`exterior_area - hole_area`) negative. Both are confirmed failure
+    modes on real CAMSIZER frames.
+
+    `shapely.make_valid` repairs both, at the cost of returning a
+    `Polygon`, `MultiPolygon`, or `GeometryCollection` depending on the
+    input's topology. This extracts the largest-area `Polygon` component
+    of that result -- confirmed, on the real failing frames, to recover
+    the correct object outline. Already-valid, positive-area polygons are
+    returned unchanged (same object) so callers that only measure valid
+    input see no change in behavior.
+
+    Args:
+        poly: Candidate object polygon, possibly invalid.
+
+    Returns:
+        A valid, positive-area `Polygon` -- `poly` itself if it was
+        already valid, otherwise the largest-area polygonal component of
+        its repair -- or `None` if no component of the repair has
+        positive area (the contour is unrecoverable).
+    """
+    if poly.is_valid and poly.area > 0.0:
+        return poly
+
+    repaired = shapely.make_valid(poly)
+    if isinstance(repaired, Polygon):
+        candidates = [repaired]
+    elif isinstance(repaired, (MultiPolygon, GeometryCollection)):
+        candidates = [g for g in repaired.geoms if isinstance(g, Polygon)]
+    else:
+        candidates = []
+
+    if not candidates:
+        return None
+    largest = max(candidates, key=lambda p: p.area)
+    return largest if largest.area > 0.0 else None
+
+
 def detect_objects(corrected: np.ndarray, cfg: Config) -> tuple[np.ndarray, list[Detection]]:
     """Threshold, label, and extract subpixel contour polygons for objects.
 
@@ -182,6 +232,11 @@ def detect_objects(corrected: np.ndarray, cfg: Config) -> tuple[np.ndarray, list
     with the label whose pixel mask contains its centroid (falling back to
     the nearest labeled pixel), the largest ring per label becomes the
     polygon exterior, and any remaining rings for that label become holes.
+    On coarse/downsampled frames this combined polygon can come out
+    invalid (self-intersecting exterior, or a mis-associated/oversized
+    hole); such polygons are repaired via `_repair_polygon` before being
+    stored, so `Detection.polygon` is always either `None` or a valid,
+    positive-area `Polygon`.
 
     Args:
         corrected: Flat-fielded frame, background ~1.0, objects darker.
@@ -221,6 +276,8 @@ def detect_objects(corrected: np.ndarray, cfg: Config) -> tuple[np.ndarray, list
         centroid_row, centroid_col = region.centroid
         label_rings = rings_by_label.get(region.label, [])
         polygon = _polygon_with_holes(label_rings) if label_rings else None
+        if polygon is not None:
+            polygon = _repair_polygon(polygon)
         detections.append(
             Detection(
                 label=region.label,
