@@ -9,7 +9,7 @@ rather than trusted from a stored `qc_pass` column, so a stricter or looser
 gate can be explored just by re-running `aggregate_run` with a different
 config, without re-running detection.
 
-One function, :func:`aggregate_run`, produces three tables:
+One function, :func:`aggregate_run`, produces four tables:
 
 - `"summary"` — one row per `(sample_id, camera)`: total/accepted/rejected
   counts, a rejection count per QC flag, D10/D50/D90 of `ecd_um` and
@@ -23,6 +23,8 @@ One function, :func:`aggregate_run`, produces three tables:
 - `"accepted"` — the row subset of `grains` that passed the recomputed
   `qc_pass`, for downstream consumers (e.g. `report.py`) that want the
   clean grain table directly rather than re-deriving it.
+- `"per_frame"` — one row per `(sample_id, camera, frame_id)`, with
+  per-flag counts, same columns as `"summary"`.
 """
 
 from __future__ import annotations
@@ -201,6 +203,32 @@ def _summarize_group(group: pd.DataFrame) -> pd.Series:
     return pd.Series(result)
 
 
+def _apply_group_summary(grains: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    """Apply :func:`_summarize_group` per group of `keys`, tidy count dtypes.
+
+    Args:
+        grains: Per-grain table with `qc_pass` already recomputed.
+        keys: Grouping columns (e.g. `["sample_id", "camera"]`).
+
+    Returns:
+        One row per distinct `keys` combination, with the count columns
+        (`n_total`, `n_accepted`, `n_rejected`, `n_flag_*`) cast back to
+        `int64` (see note below on why the apply upcasts them to float).
+    """
+    table = (
+        grains.groupby(keys, sort=True)
+        .apply(_summarize_group, include_groups=False)
+        .reset_index()
+    )
+    # `_summarize_group` mixes always-integer counts with float/`nan` stat
+    # columns into one per-group Series, which upcasts the whole thing to
+    # float64; cast the count columns back to int64 for a tidy result.
+    fixed_count_cols = {"n_total", "n_accepted", "n_rejected"}
+    count_cols = [c for c in table.columns if c in fixed_count_cols or c.startswith("n_flag_")]
+    table[count_cols] = table[count_cols].astype("int64")
+    return table
+
+
 def _build_summary(grains: pd.DataFrame) -> pd.DataFrame:
     """Per `(sample_id, camera)` summary table (see module docstring).
 
@@ -210,21 +238,25 @@ def _build_summary(grains: pd.DataFrame) -> pd.DataFrame:
     Returns:
         One row per `(sample_id, camera)`, columns per :func:`_summarize_group`.
     """
-    summary = (
-        grains.groupby(["sample_id", "camera"], sort=True)
-        .apply(_summarize_group, include_groups=False)
-        .reset_index()
-    )
-    # Count columns are always well-defined integers (never `nan`) for any
-    # group, even one with zero accepted grains — unlike the percentile/
-    # mean columns. `_summarize_group` mixes them into one `pd.Series` per
-    # group alongside those float/`nan`-valued columns, which upcasts the
-    # whole per-group Series (and hence these columns, once assembled into
-    # `summary`) to `float64`; cast back to `int64` here for a tidy result.
-    fixed_count_cols = {"n_total", "n_accepted", "n_rejected"}
-    count_cols = [c for c in summary.columns if c in fixed_count_cols or c.startswith("n_flag_")]
-    summary[count_cols] = summary[count_cols].astype("int64")
-    return summary
+    return _apply_group_summary(grains, ["sample_id", "camera"])
+
+
+def _build_per_frame(grains: pd.DataFrame) -> pd.DataFrame:
+    """Per `frame_id` summary table — same columns as `summary`, per frame.
+
+    One row per `(sample_id, camera, frame_id)`; carries the per-QC-criterion
+    counts (`n_flag_*`), size percentiles, and shape mean/SD that
+    :func:`_summarize_group` produces. `n_flag_*` counts grains where each
+    flag is *set* (not mutually exclusive; can sum to more than `n_rejected`).
+
+    Args:
+        grains: Per-grain table with `qc_pass` already recomputed; must have a
+            `frame_id` column.
+
+    Returns:
+        One row per `(sample_id, camera, frame_id)`.
+    """
+    return _apply_group_summary(grains, ["sample_id", "camera", "frame_id"])
 
 
 def _build_rejection_by_ecd(grains: pd.DataFrame) -> pd.DataFrame:
@@ -263,6 +295,9 @@ def aggregate_run(grains: pd.DataFrame, cfg: Config) -> dict[str, pd.DataFrame]:
           `(sample_id, camera)`.
         - `"accepted"`: the row subset of `grains` (with `qc_pass`
           recomputed) that passed QC.
+        - `"per_frame"`: one row per `(sample_id, camera, frame_id)`, same
+          columns as `"summary"` (including per-flag counts), for spotting
+          frame-to-frame drift within a sample/camera.
 
     Raises:
         KeyError: If any name in `cfg.qc.disqualifying_flags` is not a
@@ -275,4 +310,5 @@ def aggregate_run(grains: pd.DataFrame, cfg: Config) -> dict[str, pd.DataFrame]:
         "summary": _build_summary(working),
         "rejection_by_ecd": _build_rejection_by_ecd(working),
         "accepted": accepted,
+        "per_frame": _build_per_frame(working),
     }

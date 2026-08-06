@@ -125,6 +125,21 @@ def detect(
         bool,
         typer.Option("--force", help="Reprocess every frame, clearing prior run artifacts first."),
     ] = False,
+    overview: Annotated[
+        bool,
+        typer.Option(
+            "--overview/--no-overview",
+            help=(
+                "After detection, render QC-colored overview PNGs (one per frame "
+                "with >=1 detection) into OUT/overviews/. Outlines require the run's "
+                "cfg.output.save_contours (default true)."
+            ),
+        ),
+    ] = False,
+    overview_factor: Annotated[
+        int,
+        typer.Option("--overview-factor", help="Integer factor to downsample overview PNGs by."),
+    ] = _DEFAULT_OVERLAY_FACTOR,
 ) -> None:
     """Run Stage 1 detection over every frame under FRAMES_DIR.
 
@@ -136,9 +151,15 @@ def detect(
         jobs: Overrides `cfg.runtime.n_jobs` for this call (`None` keeps the
             config value).
         force: Reprocess every frame regardless of the existing manifest.
+        overview: After detection, render QC-colored overview PNGs (one per
+            frame with >=1 detection) into OUT/overviews/. Outlines require
+            the run's cfg.output.save_contours (default true).
+        overview_factor: Integer factor to downsample overview PNGs by.
     """
     cfg = load_config(config)
     run_detect(frames_dir, out_dir, cfg, n_jobs=jobs, force=force)
+    if overview:
+        _write_overviews(out_dir, frames_dir, cfg, overview_factor)
 
 
 @app.command()
@@ -155,7 +176,7 @@ def aggregate(
         grains_path: Grains root directory or single grains table file (see
             `_read_grains`).
         out_dir: Destination directory `summary`/`rejection_by_ecd`/
-            `accepted` are written into, as `cfg.output.format`.
+            `accepted`/`per_frame` are written into, as `cfg.output.format`.
         config: Optional user config YAML overriding the packaged defaults.
     """
     cfg = load_config(config)
@@ -233,6 +254,36 @@ def _read_overlay_contours(run_dir: Path, frame_ids: list[str], cfg: Config) -> 
     if not frames:
         return pd.DataFrame(columns=["grain_uid", "wkt", "um_per_px"])
     return pd.concat(frames, ignore_index=True)
+
+
+def _write_overviews(run_dir: Path, frames_dir: Path, cfg: Config, factor: int) -> None:
+    """Render QC-colored overview PNGs for every frame with a detection.
+
+    A main-process post-`detect` pass (never inside the parallel
+    `process_frame` workers): reads the just-written grains + contours and
+    calls :func:`grain_morph.overlay.make_overlays` for every distinct
+    `frame_id` present (which, since only detected grains are stored, is
+    exactly the set of frames with at least one detection). Outlines are only
+    drawn where per-frame contour files exist, i.e. when the run had
+    `cfg.output.save_contours` true (default).
+
+    Args:
+        run_dir: Completed `detect` output directory (has `grains/` and,
+            for outlines, `contours/`).
+        frames_dir: Directory to search for the source frame images.
+        cfg: Resolved pipeline configuration.
+        factor: Integer factor the full-res composite is downsampled by.
+    """
+    grains = _read_grains(run_dir / "grains", cfg)
+    if grains is None:
+        typer.echo("No grains detected; nothing to overlay.")
+        return
+    frame_ids = sorted(grains["frame_id"].astype(str).unique())
+    contours = _read_overlay_contours(run_dir, frame_ids, cfg)
+    paths = make_overlays(
+        grains, contours, frames_dir, run_dir / "overviews", frame_ids, factor, cfg, labels=None
+    )
+    typer.echo(f"Wrote {len(paths)} overview PNG(s) to {run_dir / 'overviews'}")
 
 
 @app.command()
