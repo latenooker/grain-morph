@@ -130,3 +130,37 @@ config + `qc.py` (dict per camera, fall back to the global scalar when a camera
 is unlisted). Numbers above are on placeholder calibration; the *basic ~7* /
 *zoom size-gate* structure is calibration-independent (both are pixel cuts), but
 re-confirm the exact values once real µm/px lands.
+
+## Low curvature_entropy flags fiber/organic debris — proposed `flag_debris` (open)
+
+`curvature_entropy` (as implemented) is **inverse to intuition**: it is *high*
+for smooth/round grains and *low* for angular, straight-edged, or filamentary
+boundaries — a mostly-straight boundary concentrates curvature near zero, so its
+distribution is peaked → low entropy. Across accepted grains it correlates
+positively with solidity/circularity/convexity (r≈+0.47 each) and is essentially
+**size-independent** (r≈+0.01 with ecd). Treat it as a boundary-*regularity*
+score, not a roughness score — the name misleads.
+
+**Debris signal (2026-08-05 labeling).** The 10 lowest-`curvature_entropy`
+objects across P_01_cs_003 + P_17_cs_002 were *all* non-grains — thin curved
+fibers/hairs, overlapping strands, and a frame-edge fragment (operator
+confirmed: "all are bad"). Real grains do not appear until CE ≈ 0.63; the only
+*accepted* grains below that are two genuine debris escapes (CE 0.252 & 0.317,
+ecd 10–12) that slip past QC because the size/sliver flags happen not to fire.
+
+**Border confound — the guard that matters.** Low CE is *also* produced by
+**border-clipped real grains**: a straight frame-cut edge looks like a straight
+fiber to the curvature distribution. In the CE∈[0.30,0.66] band (90 grains),
+**42 are border-clips** (real grains, already owned by `flag_border`) and 48 are
+non-border debris candidates (44 of them fiber/tiny: AR≥3 or ecd<20). So a raw
+CE cut mislabels border-clipped grains as debris.
+
+**Proposed rule:** `flag_debris = curvature_entropy < 0.5 AND NOT flag_border`,
+**non-disqualifying by default** (like `flag_possible_agglomerate`) — visible in
+per-frame counts, doesn't change acceptance until added to `disqualifying_flags`.
+Projected (both test runs): removes exactly the 2 accepted debris escapes
+(1/sample, zero real-grain false positives), gives ~43 already-rejected fibers an
+honest reason, and the `NOT flag_border` guard keeps 32 border-clipped real
+grains (30 P_17 / 2 P_01) from being mislabeled. CE only exists for grains with a
+polygon; pure-shape, so calibration-independent. Optionally tighten toward fibers
+with `AND (aspect_ratio high OR ecd small)`.
