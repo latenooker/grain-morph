@@ -51,3 +51,42 @@ Findings from that exercise:
   tools).
 - `edge_width_px`/`min_ecd_px` are in image pixels, so these cuts are
   independent of the µm/px calibration.
+
+## Defocus edge-width cut is not camera-scale-invariant — per-camera cut needed (open)
+
+`qc.defocus_edge_width_px` is a single global cut, but `edge_width_px` is an
+**absolute pixel blur**: for a focused grain it is ~`blur_µm / µm_per_px`, so a
+camera with a smaller µm/px (the **zoom** CCD) reads a *higher* `edge_width_px`
+for the *same* physical sharpness. The 5.25 cut was fit on **basic**-camera
+labels only (see "Defocus thresholds — tuning provenance" above), so it is too
+strict for zoom and over-rejects otherwise-sharp zoom (and coarse-basic) grains.
+NB: that section's "scale-independent" claim holds across grain *size within one
+camera*, not across cameras with different µm/px.
+
+Concrete example (P_01_cs_003 test run, placeholder calib basic 20 / zoom 8
+µm/px): `P_01_cs_003_z_0035950:1` (zoom) was rejected **solely** on
+`edge_width_px = 5.74 > 5.25`, despite `contrast = 0.82` (sharp). All 6 zoom
+objects in that sample were rejected, mostly on defocus.
+
+**Evaluated but rejected — size-ratio normalization** (`edge_width_px / ecd_px`,
+i.e. "edge width : core area"): the `µm/px` cancels, giving a calibration-free
+ratio ~`blur_µm / size_µm` — elegant, and it *does* rescue the large zoom grain
+above (ratio 0.038, in the accepted cluster). But it trades the cross-camera
+scale error for a **size** error: a fixed blur is a larger fraction of a small
+grain, so small *sharp* grains climb to ratio 0.16–0.27 — *above* genuinely
+defocused large grains (`edge_width` 11–12 px → ratio ~0.12). The ordering
+inverts, so **no single ratio cut separates the classes** (verified on the
+63-grain P_01_cs run). Normalizing by *area* squares the size term and is worse.
+So the ratio is at best a secondary cross-check for very large grains, not the
+primary gate.
+
+**Recommended fix — make the threshold per-camera, not the metric.** Each camera
+has a fixed µm/px, so an absolute `edge_width_px` cut already *is* an absolute-µm
+cut *within* a camera. Add a per-camera `defocus_edge_width_px` (e.g.
+`{basic: 5.25, zoom: <tuned>}`), falling back to the global value when a camera
+is unlisted. Physically zoom needs a *higher* px cut (~2.5× under the placeholder
+20/8 → ~13 px, under which none of the P_01 zoom grains would be edge-rejected —
+`contrast` still catches the genuinely soft ones). Setting the zoom cut properly
+wants a few hand-labeled **zoom** grains rather than the placeholder ratio;
+`P_17_cs_002` (75 zoom frames) is a better labeling source than P_01 (6 zoom
+objects).
