@@ -90,3 +90,43 @@ is unlisted. Physically zoom needs a *higher* px cut (~2.5× under the placehold
 wants a few hand-labeled **zoom** grains rather than the placeholder ratio;
 `P_17_cs_002` (75 zoom frames) is a better labeling source than P_01 (6 zoom
 objects).
+
+### Hand-label results (2026-08-05) — basic ≠ zoom failure mode
+
+Labeled raw-vs-delineated crops across the edge_width range on P_01_cs_003 +
+P_17_cs_002 (operator call, placeholder calib basic 20 / zoom 8 µm/px):
+
+- **Basic — edge_width IS the right axis.** Sharp through `edge_width ≈ 6.66`,
+  unusable from `≈ 7.34` up (a big, obviously-defocused grain at 10–12 px is the
+  clear reject). So **`defocus_edge_width_px` basic 5.25 → ~7.0**. The old 5.25
+  was slicing through a single visually-sharp population.
+- **Zoom — edge_width is the WRONG axis; acceptability tracks GRAIN SIZE.** On
+  zoom the *crispest* grain had the *highest* edge_width (8.34 px, `ecd = 823`),
+  while the fuzziest were the *smallest* (`ecd` 14–19 px, edge 4–6). Operator
+  labels: acceptable `ecd` 96–823, intermediate `ecd` 35, unusable `ecd` ≤19 —
+  a clean split on **size**, none on edge_width. Cause: at high magnification a
+  small grain is only ~15 px across, so its few-px edge is a large fraction and
+  it *looks* soft regardless of true focus. Fix for zoom: gate on **size**, not
+  edge — **`min_ecd_px` zoom ~10 → ~30** (drops the tiny fuzz, keeps ecd ≥35) —
+  and let the zoom edge cut go generous (~17 px, the µm/px-scale-equivalent of
+  basic's 7; non-binding on observed data).
+- **Ratio verdict, refined.** `edge_width/ecd` separates the *zoom* labels
+  cleanly (acceptable ≤0.07, unusable ≥0.23) — because on zoom the problem
+  genuinely *is* small-grain softness — but still fails *basic*: a big defocused
+  basic grain (edge 10.1, `ecd` 133) has ratio 0.076, *below* a mildly-soft
+  smaller one at 0.099, so a ratio cut would accept the worse grain. Hence
+  **per-camera, different gates** (basic: absolute edge_width; zoom: size), not
+  one universal metric.
+
+**Projected impact** (recomputing QC on the two test runs, basic edge>7 /
+zoom min_ecd>30 / contrast<0.70): **+66 sharp basic grains recovered**
+(P_17 basic 277→339, P_01 basic 33→37) that the 5.25 cut had wrongly rejected,
+and the **zoom composition corrected** — it had been accepting the 3 unusably
+tiny grains and rejecting the usable large ones; the size gate flips that
+(P_01 zoom recovers `z_0035950`). Total accepted 313→380.
+
+Implementation: make both `defocus_edge_width_px` and `min_ecd_px` per-camera in
+config + `qc.py` (dict per camera, fall back to the global scalar when a camera
+is unlisted). Numbers above are on placeholder calibration; the *basic ~7* /
+*zoom size-gate* structure is calibration-independent (both are pixel cuts), but
+re-confirm the exact values once real µm/px lands.
