@@ -167,14 +167,16 @@ decisions.
 4. **`*_um` columns are placeholder-scaled** until real `um_per_px` lands; the
    defocus/size QC cuts and all shape metrics are pixel- or ratio-based and are
    unaffected.
-5. **Feret helpers reinvent library functions.** `_feret_max_px` (brute-force
-   `O(N²)`) duplicates `skimage.measure.regionprops.feret_diameter_max`, and
-   `_feret_min_px` (rotating calipers) duplicates the min width from
-   `shapely.minimum_rotated_rectangle`. Both are correct, but per the project's
-   "assemble, don't reinvent" rule they should be replaced with the library
-   calls. (These are the only two morphometric *algorithms* written from scratch
-   where a maintained equivalent already exists; the other custom entries are
-   either one-line standard formulas or genuinely bespoke QC metrics.)
+5. **Feret min/max are custom but consistent** — both derive from the *same*
+   subpixel convex hull (`poly.convex_hull`): max = max pairwise hull-vertex
+   distance (`_feret_max_px`), min = rotating-calipers width on that hull
+   (`_feret_min_px`). Keeping them on one geometry is correct and deliberate.
+   Note: `skimage.regionprops.feret_diameter_max` is **not** an appropriate
+   swap for the max — it is raster-based, so using it would desync the max from
+   the subpixel min and mix pixel/subpixel bases. The only clean library
+   simplification is Feret **min** → `shapely.minimum_rotated_rectangle` (shorter
+   side), which stays in shapely on the same polygon; the max has no shapely
+   one-liner and is a trivial reduction, not an algorithm worth importing.
 
 See `followups.md` for the QC-tuning and performance follow-ups
 (per-camera defocus/size gates, `flag_debris`, disk-bound processing).

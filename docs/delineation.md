@@ -120,6 +120,5 @@ Delineation is **almost entirely imported algorithms + custom glue**, matching
 the project rule ("assemble from maintained packages; write glue, config, CLI,
 tests — not algorithms"). The only custom *algorithm* here is the `half_max`
 threshold heuristic; everything else custom is orchestration. For the
-measurement side's accounting — including two Feret helpers that reinvent
-`skimage.regionprops.feret_diameter_max` / `shapely.minimum_rotated_rectangle`
-and should be replaced — see `morphometrics.md`.
+measurement side's accounting — including the custom-but-consistent Feret
+min/max pair (both on the subpixel convex hull) — see `morphometrics.md`.
