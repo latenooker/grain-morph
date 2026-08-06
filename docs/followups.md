@@ -198,3 +198,34 @@ after I/O is fixed. Could crop morphology to object bounding boxes.
 
 Bottom line: disk-bound. The one change that matters is not reading frames off
 the USB drive during compute; everything else is secondary.
+
+## Mineral discrimination (quartz/feldspar/mica) — OUT OF SCOPE, noted
+
+Not a main project goal; recorded because it came up and there is a partial
+signal. `grain-morph` sees only backlit **silhouettes** (outline + interior
+opacity), so prospects differ sharply by mineral:
+
+- **Mica — tractable by shape.** Platy habit → tumbling flakes present as thin,
+  high-aspect, low-sphericity outlines (classic CAMSIZER b/l discriminator).
+  Existing columns suffice: `aspect_ratio`, `wadell_sphericity`,
+  `feret_min/feret_max` (thinness), plus interior translucency via `contrast`
+  (thin mica transmits more → brighter core). **NB:** `flag_sliver`
+  (aspect_ratio > 3) removes exactly these grains, so any mica analysis must
+  include flagged grains, not the accepted set.
+- **Quartz vs feldspar — unreliable by silhouette alone.** Both are equant,
+  near-identical outlines. The only morphological handle is cleavage: feldspar's
+  two ~90° cleavages tend toward blocky, straight-faceted, near-90°-cornered
+  shapes; quartz (conchoidal, no cleavage) is more irregular. So a targeted
+  **`frac_right_angle` + `straight_edge_fraction`** feature (not generic
+  angularity) is the best shot — but statistical at best, and erased by
+  rounding. Reliable ID needs another modality (Na-cobaltinitrite staining,
+  SEM-EDS, Raman, QEMSCAN, or optical) or labeled training grains.
+
+**Exploratory finding (2026-08-06, P_01+P_17, 656 grains, unlabeled):**
+`wadell_sphericity` is **bimodal** — main equant mode ~0.6 + a distinct
+low-sphericity mode ~0.08–0.12 (valley ~0.2); corroborated by an `aspect_ratio`
+secondary bump (~4–6) and a `thinness` shoulder (~0.1–0.25). A real
+elongated/platy sub-population exists — **but it is confounded with the organic
+fiber debris** (also thin, low-sphericity); the low-`curvature_entropy` signal
+(see `flag_debris` note) would be the natural mica-vs-fiber separator. Nothing
+here is confirmable without mineralogical ground truth.
