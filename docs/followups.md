@@ -164,3 +164,37 @@ honest reason, and the `NOT flag_border` guard keeps 32 border-clipped real
 grains (30 P_17 / 2 P_01) from being mislabeled. CE only exists for grains with a
 polygon; pure-shape, so calibration-independent. Optionally tighten toward fibers
 with `AND (aspect_ratio high OR ecd small)`.
+
+## Processing time is disk-bound, not compute-bound (performance)
+
+Profiled 2026-08-06 on the P_01_cs / P_17_cs test runs (frames on an external
+USB drive, `n_jobs = -1` on a 14-core machine).
+
+**#1 — Frame I/O dominates (~80–85% of wall time).** Reading a 2048×2040 BMP is
+**~165 ms/frame from the USB drive vs ~1 ms/frame from local SSD (128×)**. In a
+serial profile `imread` is 9.7 s of 23.2 s (42%); parallelized it's worse in
+share because all 14 cores sit idle waiting on the one shared USB bus — which is
+why parallel detection (0.21 s/frame) was barely faster than serial
+(0.41 s/frame). Compute floor with I/O removed is ~0.24 s/frame → P_17 detection
+would be **~8–10 s instead of 102 s**. **Fix: stage the run to local disk (one
+bulk sequential copy) before processing.** Amortizes across detect + overview +
+report, which each independently re-read every frame off the drive.
+
+**#2 — The blank frame is re-read once per frame.** 112 `imread` calls for 56
+frames — the single `_{cam}_back.bmp` is re-decoded once per frame of that
+camera. Fix: `functools.lru_cache` on `_read_grayscale` by path (blank read once
+per worker).
+
+**#3 — Overview rendering (only with `--overview`): ~1.8 s/frame and serial.**
+Dominated the P_17 run (347 × 1.8 ≈ 10 min vs 102 s for detection). It runs in
+the main process (not parallelized) and re-reads every source frame from the
+drive. Fix: parallelize the pass (reuse the loky pool) and read from the local
+stage; a PIL raster path would beat matplotlib full-res render.
+
+**#4 — `detect_objects` morphology: ~32% of the compute floor.** Full-resolution
+scipy `binary_fill_holes` / erosion / dilation (2.6 s in `binary_erosion2`) +
+`distance_transform_edt` (2.0 s) on 2048×2040 arrays. Secondary; only visible
+after I/O is fixed. Could crop morphology to object bounding boxes.
+
+Bottom line: disk-bound. The one change that matters is not reading frames off
+the USB drive during compute; everything else is secondary.
