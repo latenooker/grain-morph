@@ -37,6 +37,12 @@ class ParsedName:
 
     Attributes:
         sample_id: Sample identifier captured by the ``sample`` regex group.
+        run: Run/measurement identifier captured by an optional ``run`` regex
+            group, or ``None`` when ``sample_regex`` defines no ``run`` group
+            (the packaged default folds any run token into ``sample_id``
+            instead). When present, it makes identity — and blank pairing —
+            run-scoped, so multiple runs of one sample+camera in a single
+            discovery root don't collide.
         camera: Full camera name, mapped from the captured ``cam`` code via
             ``cfg.filename.camera_map`` (e.g. ``"basic"``/``"zoom"``).
         frame_index: Frame number, or ``None`` for blank/background frames.
@@ -46,6 +52,7 @@ class ParsedName:
     """
 
     sample_id: str
+    run: str | None
     camera: str
     frame_index: int | None
     is_blank: bool
@@ -60,7 +67,11 @@ class FrameSpec:
         path: Path to the data frame's image file.
         parsed: Identity decoded from ``path``'s filename.
         blank_path: Path to the blank/background frame sharing this frame's
-            ``(sample_id, camera)``, or ``None`` if no such blank was found.
+            ``(sample_id, camera, run)``, or ``None`` if no such blank was
+            found. Including ``run`` keeps pairing correct when a discovery
+            root spans multiple runs of one sample+camera (see
+            :class:`ParsedName`); with the default (run-less) schema ``run`` is
+            ``None`` for every frame, so this reduces to ``(sample_id, camera)``.
     """
 
     path: Path
@@ -92,6 +103,7 @@ def parse_name(path: str | Path, cfg: Config) -> ParsedName | None:
     frame_group = groups.get("frame")
     return ParsedName(
         sample_id=groups["sample"],
+        run=groups.get("run"),
         camera=cfg.filename.camera_map[groups["cam"]],
         frame_index=int(frame_group) if frame_group is not None else None,
         is_blank=frame_group is None,
@@ -116,14 +128,16 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
     file is parsed via :func:`parse_name`, which discards files that
     don't match ``cfg.filename.sample_regex``. Each remaining data
     (non-blank) frame is paired with the blank frame that shares its
-    ``(sample_id, camera)``, if one was found.
+    ``(sample_id, camera, run)``, if one was found -- so a discovery root that
+    mixes multiple runs of one sample+camera pairs each run's frames to that
+    run's own blank rather than to whichever blank was walked last.
 
     Args:
         root: Directory to search recursively for image files.
         cfg: Resolved pipeline configuration providing ``filename`` rules.
 
     Returns:
-        Data-frame specs sorted by ``(sample_id, camera, frame_index)``.
+        Data-frame specs sorted by ``(sample_id, run, camera, frame_index)``.
     """
     root = Path(root)
     paths = sorted(
@@ -133,13 +147,13 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
     )
 
     data_frames: list[tuple[Path, ParsedName]] = []
-    blanks: dict[tuple[str, str], Path] = {}
+    blanks: dict[tuple[str, str | None, str], Path] = {}
     for path in paths:
         parsed = parse_name(path, cfg)
         if parsed is None:
             continue
         if parsed.is_blank:
-            blanks[(parsed.sample_id, parsed.camera)] = path
+            blanks[(parsed.sample_id, parsed.run, parsed.camera)] = path
         else:
             data_frames.append((path, parsed))
 
@@ -147,11 +161,15 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
         FrameSpec(
             path=path,
             parsed=parsed,
-            blank_path=blanks.get((parsed.sample_id, parsed.camera)),
+            blank_path=blanks.get((parsed.sample_id, parsed.run, parsed.camera)),
         )
         for path, parsed in data_frames
     ]
-    specs.sort(key=lambda s: (s.parsed.sample_id, s.parsed.camera, s.parsed.frame_index))
+    def _sort_key(s: FrameSpec) -> tuple[str, str, str, int | None]:
+        p = s.parsed
+        return (p.sample_id, p.run or "", p.camera, p.frame_index)
+
+    specs.sort(key=_sort_key)
     return specs
 
 

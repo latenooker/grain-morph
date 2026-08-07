@@ -471,11 +471,10 @@ def _build_row(
         "frame_path": str(spec.path),
         "sample_id": spec.parsed.sample_id,
         "camera": spec.parsed.camera,
-        # `ParsedName` has no `run` group in the current filename schema
-        # (task-12 brief: "from filename if present else null") -- always
-        # null today, kept as a column so a future filename schema that
-        # does capture a run identifier needs no row-assembly changes.
-        "run": None,
+        # `run` is populated from `sample_regex`'s optional `run` group when
+        # present, else `None` (the packaged default has no `run` group and
+        # folds any run token into `sample_id` instead).
+        "run": spec.parsed.run,
         "label": det.label,
         "centroid_x": float(centroid_x),
         "centroid_y": float(centroid_y),

@@ -39,3 +39,31 @@ def test_appledouble_sidecar_ignored(frame_dir):
     specs = discover_frames(frame_dir, load_config(None))
     assert len(specs) == 2  # unchanged from test_discovers_data_frames_only
     assert all(not s.path.name.startswith(".") for s in specs)
+
+
+def test_blank_pairing_is_run_scoped(tmp_path):
+    """Two runs of one sample+camera each pair to their OWN run's blank.
+
+    Regression: when `sample_regex` separates a `run` group, blanks must key on
+    (sample, camera, run). Otherwise the two runs' blanks collide and a frame is
+    flat-fielded against the wrong run's background.
+    """
+    import imageio.v3 as iio
+    import numpy as np
+    import yaml
+
+    d = tmp_path / "frames"
+    d.mkdir()
+    bg = np.full((16, 16), 200, np.uint8)
+    for run, frame in [("001", "0000001"), ("002", "0000002")]:
+        iio.imwrite(d / f"SAMP_{run}_b_{frame}.bmp", bg)
+        iio.imwrite(d / f"SAMP_{run}_b_back.bmp", bg)
+    regex = r"(?P<sample>.+)_(?P<run>\d+)_(?P<cam>[bz])_(?:(?P<frame>\d+)|back)$"
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(yaml.safe_dump({"filename": {"sample_regex": regex}}))
+    specs = discover_frames(d, load_config(cfg_path))
+    assert len(specs) == 2
+    for s in specs:
+        assert s.parsed.run is not None
+        assert s.blank_path is not None
+        assert f"_{s.parsed.run}_b_back" in s.blank_path.name  # same run's blank
