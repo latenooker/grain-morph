@@ -30,3 +30,6 @@ outputs/
 
 # OS
 .DS_Store
+
+# R history
+.Rhistory
