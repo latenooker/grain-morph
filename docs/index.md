@@ -28,11 +28,14 @@ looser QC gate is a cheap re-run of aggregation, not a re-detection.
 
 | Doc | Covers |
 |---|---|
+| [`tutorial.md`](tutorial.md) | **start here** — a runnable 10-min first run on committed example frames |
+| [`../README.md`](../README.md) | install, quickstart, full config reference, QC tuning |
 | [`delineation.md`](delineation.md) | flat-field → threshold → label → **subpixel boundary** → repair |
 | [`morphometrics.md`](morphometrics.md) | every per-grain calculation + custom/imported provenance |
 | [`qc.md`](qc.md) | focus/contrast metrics, flags, the accept/reject gate |
 | [`aggregation.md`](aggregation.md) | per-(sample,camera) & per-frame summaries, ECD rejection binning |
 | [`followups.md`](followups.md) | open work: per-camera defocus/size gates, `flag_debris`, performance |
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | dev setup, conventions, workflow |
 
 ## Commands
 

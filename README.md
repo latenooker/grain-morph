@@ -8,6 +8,26 @@ never silently drops -- anything that looks unreliable (defocused, border-
 clipped, a sliver, a probable agglomerate), and produces per-sample summary
 tables plus QC review figures.
 
+## Documentation
+
+**New here? Run the [10-minute tutorial](docs/tutorial.md)** — it works on
+example frames committed in this repo (no hardware or external data needed).
+
+- [`docs/index.md`](docs/index.md) — one-page pipeline overview + doc map
+- [`docs/tutorial.md`](docs/tutorial.md) — hands-on first run
+- [`docs/delineation.md`](docs/delineation.md) — how frames become grain outlines
+- [`docs/morphometrics.md`](docs/morphometrics.md) — every metric's formula + which library computes it
+- [`docs/qc.md`](docs/qc.md) — QC metrics, flags, and the accept/reject gate
+- [`docs/aggregation.md`](docs/aggregation.md) — the summary tables
+- [`docs/followups.md`](docs/followups.md) — **known limitations & open work** (read before assuming a rough edge is a bug)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup, conventions, workflow
+
+The `docs/` reference set is currently **work-in-progress**. Known caveats worth
+knowing up front: `curvature_entropy` is semantically inverted vs its name (a
+regularity score — see below); the defocus threshold isn't camera-scale-invariant;
+`*_um` sizes are only as good as your `calibration.um_per_px`; and processing is
+disk-bound (stage frames locally for large runs). All are detailed in `followups.md`.
+
 ## Install
 
 Requires Python >= 3.11. `wadell_rs` (Wadell roundness/sphericity) installs
@@ -240,12 +260,18 @@ three richer shape descriptors are computed per grain:
   angularity measures -- roundness compares corner curvature to the
   inscribed circle; sphericity compares the object to its area-equivalent
   circle.
-- **Curvature entropy** -- the Shannon entropy of the boundary's local
-  (signed) curvature distribution, normalized to `[0, 1]`. A smooth, regular
-  outline concentrates curvature into a few histogram bins (low entropy); a
-  rough, crenulated outline spreads it across many (high entropy). A
-  scale-free boundary-complexity scalar that complements EFD and Wadell
-  roundness rather than duplicating them.
+- **Curvature entropy** -- the normalized (`[0, 1]`) Shannon entropy of the
+  boundary's local signed-curvature histogram. **Note:** as implemented it
+  behaves as a boundary-*regularity* score -- **high for smooth/round grains,
+  low for angular or filamentary ones** (it correlates ~+0.5 with
+  solidity/circularity and is size-independent), the *opposite* of what
+  "entropy" suggests, because the histogram uses each grain's own curvature
+  range. It is also outlier-sensitive and not comparable across grains on an
+  absolute scale. Useful as a regularity complement to EFD and Wadell roundness
+  (e.g. it separates fibrous debris), but see
+  [`docs/morphometrics.md`](docs/morphometrics.md) and
+  [`docs/followups.md`](docs/followups.md), where a verifiable fixed-range
+  redefinition is proposed.
 
 ## Parallelization
 
