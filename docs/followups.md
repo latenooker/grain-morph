@@ -247,14 +247,13 @@ this. **Do not add any folder-based grouping or per-sample-directory assumption*
 `filename.sample_regex` is the single source of identity truth — update it (and
 `camera_map`) if a deployment's naming differs.
 
-**Latent risk to fix before wide deployment — blank pairing ignores run.** Blanks
-are keyed only on `(sample_id, camera)` (`io.py`), and the current filename schema
-doesn't parse a *run* identifier (the `run` column is always null). If a discovery
-root contains **multiple runs of the same sample+camera**, each with its own
-`_back` blank, the blanks collide in the dict and the one kept is
-filesystem-`rglob`-order-dependent — so a frame could be flat-fielded against the
-wrong run's blank. Fix: capture `run` in `sample_regex`, include it in both the
-`ParsedName` identity and the blank-pairing key (fall back to `(sample, camera)`
-when a run token is absent), and — for the same reason — consider making blank
-pairing prefer a same-run blank. Same rule applies to `.xle` ingestion: parse
-identity (and run) from the filename, never the folder.
+**Blank pairing is now run-scoped (FIXED).** `ParsedName` gained an optional
+`run` field, parsed from an optional `(?P<run>…)` group in
+`filename.sample_regex`; blank pairing keys on `(sample_id, run, camera)` and the
+`run` column is populated from it. With the packaged (run-less) default schema
+`run` is `None` everywhere, so behavior is unchanged (the run token stays folded
+into `sample_id`). A deployment whose `sample_regex` separates run — e.g.
+`(?P<sample>.+)_(?P<run>\d+)_(?P<cam>[bz])_(?:(?P<frame>\d+)|back)$` — then gets
+per-run blank pairing automatically, so multiple runs of one sample+camera in a
+single discovery root no longer collide. Same rule applies to `.xle` ingestion:
+parse identity (and run) from the filename, never the folder.
