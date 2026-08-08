@@ -9,6 +9,10 @@ codebase follows, and the workflow for landing a change.
 uv sync --extra dev          # or: pip install -e ".[dev]"
 ```
 
+Conda users: `conda env create -f environment.yml && conda activate grain-morph`
+gives a runtime env; add the dev extras with `pip install -e ".[dev]"`. See the
+[README Install section](README.md#install) for all three paths.
+
 Everything runs through the dev extras: `pytest`, `ruff`, `mypy`.
 
 ## The three checks (run before every PR)

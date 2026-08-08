@@ -35,12 +35,28 @@ directly from its git repository -- there is no `fast_rs`/pure-Python
 fallback in this codebase; that dependency must build successfully for
 `grain-morph` to install at all.
 
-**uv** (recommended -- this repo ships a pinned `uv.lock`):
+**uv** (recommended for a pinned, reproducible install -- this repo ships
+`uv.lock`):
 
 ```bash
 uv sync                 # runtime dependencies only
 uv sync --extra dev      # + pytest, ruff, mypy, psutil
 ```
+
+**conda / miniconda** -- one command from the committed `environment.yml`,
+which pulls the binary-heavy dependencies (shapely/GEOS, scikit-image, scipy,
+pyarrow) as prebuilt conda-forge packages so nothing compiles locally:
+
+```bash
+conda env create -f environment.yml
+conda activate grain-morph
+```
+
+The env is installed editable (`-e .`), so a later `git pull` of new code is
+picked up without reinstalling. It's runtime-only by default; add the dev tools
+inside the activated env with `pip install -e ".[dev]"`. Note
+`environment.yml` tracks `pyproject.toml`'s version bounds rather than an exact
+lock -- for a fully pinned environment use the `uv` path above.
 
 **pip**, in a virtualenv:
 
@@ -50,7 +66,7 @@ pip install -e .          # runtime dependencies only
 pip install -e ".[dev]"   # + pytest, ruff, mypy, psutil
 ```
 
-Either path installs the `grain-morph` console script (`grain_morph.cli:app`,
+Every path installs the `grain-morph` console script (`grain_morph.cli:app`,
 built with Typer).
 
 ## Testing / development
