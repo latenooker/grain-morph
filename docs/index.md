@@ -35,6 +35,7 @@ looser QC gate is a cheap re-run of aggregation, not a re-detection.
 | [`qc.md`](qc.md) | focus/contrast metrics, flags, the accept/reject gate |
 | [`aggregation.md`](aggregation.md) | per-(sample,camera) & per-frame summaries, ECD rejection binning |
 | [`followups.md`](followups.md) | open work: per-camera defocus/size gates, `flag_debris`, performance |
+| [`handoff.md`](handoff.md) | **state of the project** — what's done, what's open, priorities |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | dev setup, conventions, workflow |
 
 ## Commands

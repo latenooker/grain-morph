@@ -1,128 +1,155 @@
-# Handoff — three pending features
+# Handoff — state of grain-morph
 
-Requested during the 2026-08-05 session, deferred (a detection-noise bug took
-priority). Recommended order: **3 → 1 → 2** (feature 3 changes the output schema
-that 1 and 2 build on). Each should go through the normal brainstorm → plan →
-TDD → review flow; the design decisions below are already settled, so planning
-should be quick.
+Last updated: 2026-08-08. This is the rolling baton-pass: what's done, what's
+open, and where to look. Deep detail on the open QC/perf items lives in
+[`followups.md`](followups.md); this doc orients you and prioritizes.
 
-Current state at handoff: `main` has the full pipeline + `overlay` command +
-tuned defocus thresholds (5.25/0.70) + the empty-frame noise fix. Calibration is
-a placeholder (basic 20 / zoom 8 µm/px); real µm/px is not yet available (it's a
-device optical spec — see `followups.md` and the session on calibration).
+## Where things stand
+
+`main` is the single active branch and is fully pushed to
+`github.com/latenooker/grain-morph`. The pipeline runs end-to-end
+(detect → aggregate → report/overlay), tested (95 passing, 1 realdata skip),
+ruff + mypy clean.
+
+**Calibration is still a placeholder** (`basic 20 / zoom 8 µm/px` in test runs);
+real µm/px is a device optical spec not yet available. So **every `*_um`
+column/percentile in existing outputs is placeholder-scaled — not physical.** All
+pixel-native, ratio, and shape metrics, and the entire QC gate, are
+calibration-independent and valid. This is what Feature 3 (below) addresses.
+
+## Done this session (2026-08-06 → 08, all merged to `main`)
+
+- **Per-frame summary table** (`aggregate` → `per_frame`) and **`detect
+  --overview`** — the original Feature 1 & 2. Merged via PR #1 (commit `92408bc`).
+- **Documentation set** for collaborators: `docs/index.md` (hub),
+  `docs/tutorial.md` (runnable on committed fixtures), `delineation.md`,
+  `morphometrics.md`, `qc.md`, `aggregation.md`, a revised `README.md`, and
+  `CONTRIBUTING.md`. Each carries a **custom-vs-imported** provenance table.
+- **Run-scoped blank pairing** (`fix/blank-pairing-run`, commit `e1d5a0b`) —
+  `ParsedName.run` + blank key `(sample_id, run, camera)`; non-breaking (default
+  schema keeps `run=None`). Closed the one real correctness risk in the
+  deployment note.
+- Extensive **QC investigation + morphometric bug review** — captured as the
+  prioritized open work below and detailed in `followups.md`.
+
+## Open work — prioritized
+
+Each should go through the normal brainstorm → plan → TDD → review flow. Items
+1–4 are fully worked out in `followups.md` (with hand-label evidence and
+projected numbers); start there for detail.
+
+### 1. Per-camera defocus/size QC gates  *(highest correctness payoff; spec'd)*
+Hand-labeling (P_01 + P_17) showed the single global defocus cut is wrong per
+camera:
+- **basic:** `defocus_edge_width_px` 5.25 → **~7.0** (edge width is the right
+  focus axis).
+- **zoom:** edge width is size-confounded — gate on **size** instead,
+  `min_ecd_px` ~10 → **~30**; keep the zoom edge cut generous (~17).
+Make both `defocus_edge_width_px` and `min_ecd_px` **per-camera** in `config.py`
++ `qc.py` (dict per camera, fall back to the global scalar). Projected: +66 sharp
+basic grains recovered, zoom composition corrected. See `followups.md`
+§"Defocus … per-camera cut" and §"Hand-label results".
+
+### 2. `flag_debris` — low-curvature-entropy fiber/debris flag  *(spec'd)*
+`flag_debris = curvature_entropy < 0.5 AND NOT flag_border`, **non-disqualifying
+by default**. Removes the 2 accepted debris escapes, labels ~43 already-rejected
+fibers, guard spares border-clipped grains. **Interacts with #3** — it relies on
+`curvature_entropy`'s current behavior. See `followups.md` §"flag_debris".
+
+### 3. Fix `curvature_entropy`  *(bug; do with/after #2)*
+As implemented it is **inverted vs its docstring** (high = smooth/regular, not
+rough) because the histogram uses each grain's own curvature range — outlier-
+sensitive and not cross-grain comparable. Also the boundary gradient isn't truly
+periodic at the seam. Options: (a) keep the computation, correct the docs
+(it's a useful regularity score, and #2 depends on it), or (b) redefine with a
+**scale-normalized curvature over a fixed domain/bins** (verifiable: circle→0,
+ellipse/N-gon have closed-form values) + reference unit tests. (b) changes values
+and breaks #2, so sequence them. See `followups.md` and `morphometrics.md`
+known-issues.
+
+### 4. Performance — pipeline is disk-bound  *(profiled)*
+Frame I/O from the external USB drive is ~80–85% of wall time (165 ms/frame vs
+1 ms local). Fixes, in order: **stage the run to local SSD** before processing
+(~5–10×), `lru_cache` the blank read, **parallelize the overview pass** (reuse
+loky), crop `detect_objects` morphology to bounding boxes. See `followups.md`
+§"Processing time is disk-bound".
+
+### 5. Feret min → `shapely.minimum_rotated_rectangle`  *(minor, optional)*
+Both Feret diameters are custom-but-consistent on the subpixel hull; min could
+use the library's min-rotated-rectangle short side (same geometry). Max has no
+clean library swap — leave it. See `morphometrics.md` known-issues.
+
+### 6. Feature 3 — make calibration optional (omit µm until confirmed)  *(schema change; original pending feature)*
+The only unshipped item from the original handoff. Detailed spec preserved below
+because it lives nowhere else.
 
 ---
 
-## Feature 3 — Omit µm sizes until µm/px is confirmed (do first)
+## Feature 3 spec — omit µm sizes until µm/px is confirmed
 
-**Why:** µm/px is unknown (placeholder), so every `_um` column currently ships a
-misleading physical size. The QC gate is entirely in image pixels
-(`edge_width_px`, `min_ecd_px`), so it's calibration-independent — only the size
+**Why:** µm/px is a placeholder, so every `_um` column currently ships a
+misleading physical size. The QC gate is entirely in pixels, so only the size
 *outputs* depend on calibration.
 
 **Decision:** make calibration **optional**. When a camera has no
-`calibration.um_per_px` set, emit **px-native** size columns only and omit the
-`_um` columns for that camera's grains; do **not** fail loudly. When calibration
-*is* set, emit both (as today).
+`calibration.um_per_px`, emit **px-native** size columns only and omit `_um`
+columns for that camera's grains; do **not** fail loudly. When calibration is
+set, emit both (as today).
 
 **Where / what:**
-- `measure.py::measure_polygon` — currently emits `area_px` (only px one) plus
-  `area_um2, ecd_um, feret_max_um, feret_min_um, major_axis_um, minor_axis_um,
-  perimeter_um`. Add px-native columns computed **before** scaling:
-  `ecd_px` (note: `qc.qc_metrics` already computes an `ecd_px`; reconcile —
-  measure should own the size px columns), `feret_max_px`, `feret_min_px`,
-  `major_axis_px`, `minor_axis_px`, `perimeter_px`. Then `_um = _px * um_per_px`
-  only when calibration is present.
-- `config.py` — allow `calibration.um_per_px.{basic,zoom}` to stay `null`
-  without `um_per_px(camera)` raising; add a helper like
-  `Config.has_calibration(camera) -> bool`.
-- `pipeline.py::process_frame` / row assembly — if the frame's camera is
-  uncalibrated, populate px columns and leave `_um` columns absent (or NaN with
-  a documented convention; prefer *absent* so nobody trusts a fake number).
-  Remove/relax the up-front fail-loud calibration check (Task 12) — uncalibrated
-  now means px-only, not an error. **Document this contract change** (README +
-  the calibration-required note).
+- `measure.py::measure_polygon` — add px-native columns computed *before*
+  scaling: `feret_max_px`, `feret_min_px`, `major_axis_px`, `minor_axis_px`,
+  `perimeter_px` (and reconcile `ecd_px`, which `qc.qc_metrics` also computes —
+  measure should own the size px columns). Then `_um = _px * um_per_px` only when
+  calibration is present.
+- `config.py` — allow `calibration.um_per_px.{basic,zoom}` to stay `null` without
+  `um_per_px(camera)` raising; add `Config.has_calibration(camera) -> bool`.
+- `pipeline.py` — uncalibrated → px columns populated, `_um` absent; **relax the
+  up-front fail-loud calibration check** (`_validate_calibration`). **Ripple to
+  watch:** `um_per_px` is currently a required `float` threaded through
+  `_build_row` and the **contour record schema** (`grain_uid, wkt, um_per_px`),
+  so it must become `float | None` end-to-end.
 - `aggregate.py` / `report.py` — percentiles/summaries must work on px columns
-  when `_um` is absent (e.g. summarize `ecd_px`/`feret_min_px`).
+  when `_um` is absent (e.g. `ecd_px`/`feret_min_px`). The per-frame table (done)
+  and overview labels also need the px-only path.
 
-**Acceptance / tests:**
-- `detect` with no calibration → grains table has px size columns, no `_um`
-  columns, and the run does **not** abort.
-- `detect` with calibration → both px and `_um` columns (unchanged behavior).
-- `aggregate` produces size summaries from px columns when `_um` absent.
+**Design tension to decide:** "absent vs NaN" for `_um` on uncalibrated grains is
+only fully controllable when the *whole run* is uncalibrated — in a run mixing a
+calibrated and an uncalibrated camera, the tables merge into one schema and the
+uncalibrated rows' `_um` become **NaN on write**. Decide (and document) whether
+mixed-calibration runs are allowed / warn.
 
-**Caveat:** biggest of the three — touches measure/config/pipeline/aggregate/
-report/cli + the README calibration contract. Do it first so features 1 & 2
-build on the final schema.
+**Acceptance:** `detect` with no calibration → px size columns, no `_um`, no
+abort; with calibration → both (unchanged); `aggregate` summarizes px columns
+when `_um` absent.
 
----
-
-## Feature 1 — Per-frame morphometrics summary table
-
-**Why:** user wants per-frame granularity ("a table with morphometrics per
-frame"). The per-grain table already carries `frame_id`; there is no per-frame
-roll-up (`aggregate` only summarizes per `(sample_id, camera)`).
-
-**Decision:** add a per-frame summary — one row per `frame_id`.
-
-**Where / what:**
-- `aggregate.py::aggregate_run` — add a `"per_frame"` DataFrame to its returned
-  dict (keys currently `summary`, `rejection_by_ecd`, `accepted`). One row per
-  `frame_id` with: `sample_id, camera, n_detected, n_accepted, n_rejected`,
-  a count per `flag_*`, and accepted-grain size stats (D10/D50/D90 and/or
-  median of `ecd` and `feret_min`) + means of the shape descriptors
-  (`aspect_ratio, solidity, circularity, wadell_roundness, wadell_sphericity,
-  curvature_entropy`). Reuse the existing per-group summary logic, grouped by
-  `frame_id` instead of `(sample_id, camera)`.
-- Respect feature 3: summarize px columns when `_um` absent.
-- `cli.py::aggregate` — write the `per_frame` table alongside `summary` /
-  `rejection_by_ecd` / `accepted` via `write_table`.
-
-**Acceptance / tests:** `aggregate_run` returns a `per_frame` table with one row
-per frame, `n_accepted + n_rejected == n_detected` per row, size percentiles
-ordered; CLI writes it.
+**Caveat:** biggest change — touches measure/config/pipeline/aggregate/report/cli
++ the contour schema + the README calibration contract.
 
 ---
 
-## Feature 2 — `detect --overview` toggle (annotated overview images per run)
+## Key context for whoever picks this up
 
-**Why:** user wants overview images with grain annotations emitted as a run
-output, not only via the on-demand `overlay` command (which requires explicit
-`--frames`). This was directly useful for diagnosing the noise over-detection.
+- **Two geometries:** subpixel **polygon** (most metrics) vs **raster mask**
+  (ellipse fit + QC geometry); some metrics have both, under distinct names (the
+  QC flags threshold on the raster `qc_solidity`/`qc_aspect_ratio`, not the
+  reported polygon columns — see `morphometrics.md` Dual geometry).
+- **Flag, never drop.** `detect` records all flags; the accept/reject gate is
+  recomputed at `aggregate` from `cfg.qc.disqualifying_flags` — re-gateable
+  without re-detecting.
+- **Build philosophy:** assemble from maintained packages; custom code is glue +
+  standard formulas + a short list of bespoke metrics. Keep it that way.
+- **Identity is in the filename, never the folder** — inputs aren't reliably
+  foldered per sample; `filename.sample_regex` is the single source of identity
+  truth (now run-aware). See `followups.md` §"Deployment".
+- **Out of scope but noted:** mineral discrimination (quartz/feldspar/mica) — mica
+  is shape-tractable, quartz/feldspar isn't by silhouette; `wadell_sphericity` is
+  bimodal (a real platy population, confounded with fiber debris). `followups.md`.
 
-**Decision:** add a `--overview` flag to `detect`. Reuse the existing
-`grain_morph.overlay.make_overlays` renderer (QC-colored outlines, full-res-then-
-downsample, label auto-suppression). Render as a **post-detect pass** over the
-just-written grains + contours — NOT inside the parallel `process_frame` workers
-(keep the hot path clean and `process_frame` picklable/pure; matplotlib in loky
-workers is avoidable overhead).
+## Where things live (not in git)
 
-**Where / what:**
-- `cli.py::detect` — add `--overview/--no-overview` (default off),
-  `--overview-factor` (default 4), and a scope control (default: cap/sample,
-  since a run can be thousands of frames — reuse a stratified sample like the
-  contact sheets, or `--overview-frames all` to force every frame). After
-  `run_detect` completes, read `OUT/grains` + `OUT/contours` and call
-  `make_overlays` for the selected frames into `OUT/overviews/`.
-- Alternatively expose a thin `run_overview(out_dir, frames_root, cfg, ...)` in
-  `overlay.py` that the CLI calls, so the logic is testable without the CLI.
-- Respect feature 3 (px-only labels/titles when `_um` absent).
-
-**Caveat — density:** on this data, near-empty frames are the norm and a few are
-noise-heavy; with the noise fix, overviews will be clean. Still, cap/sample by
-default so a big run doesn't write thousands of PNGs silently (log what was
-sampled — the "no silent caps" rule).
-
-**Acceptance / tests:** `detect --overview` on a tiny run writes overview PNGs to
-`OUT/overviews/`; default-off writes none; a capped run logs the sample size.
-
----
-
-## Notes carried from this session
-- `overlay` command, tuned defocus thresholds, and the empty-frame noise fix are
-  on `main`. `docs/followups.md` has the agglomerate-detection gap and the
-  defocus-tuning provenance.
-- Calibration is a device optical spec, not in the software manual / CSV /
-  X-Plorer exports; get it from the hardware manual / Retsch datasheet or a
-  reticle image (empirical cross-calibration was ruled out — our frames are a
-  subset of the run the instrument sized over).
+- **Test-run outputs:** `/Volumes/LEXAR/Camsizer/PPX/grain-morpho-test` (P_01) and
+  `…-P_17_cs` (P_17) — placeholder-calibrated CSV runs used for the QC analysis.
+- **Full-res dev frames:** `dev_data/` (gitignored). Committed runnable subset:
+  `tests/fixtures/real/` (used by the tutorial).
+- Analysis scripts/figures from the QC investigation were scratch (not committed).
