@@ -603,6 +603,9 @@ def run_detect(
     cfg: Config,
     n_jobs: int | None = None,
     force: bool = False,
+    *,
+    sample_id: str | None = None,
+    camera: str | None = None,
 ) -> None:
     """Run Stage 1 (detect) over every frame under `root`.
 
@@ -664,8 +667,18 @@ def run_detect(
             output deterministic for tests.
         force: If `True`, reprocess every frame regardless of the
             existing manifest, after clearing all prior run artifacts.
+        sample_id: If given, forces this sample id on *every* discovered
+            frame, ignoring any filename-parsed sample (see
+            `io.parse_name`). Enables the "one directory = one sample"
+            layout where the filenames carry no sample token.
+        camera: If given, forces this camera (e.g. `"basic"`/`"zoom"`) on
+            every discovered frame. Must be one of `cfg.filename.camera_map`'s
+            values.
 
     Raises:
+        ValueError: If `camera` is not one of the configured cameras
+            (`cfg.filename.camera_map` values). Raised before `out_dir` is
+            created or any frame is processed.
         KeyError: If any distinct camera among the discovered frames has
             no (or a still-`null`) calibration entry -- see
             `_validate_calibration`. Raised before `out_dir` is created or
@@ -675,7 +688,14 @@ def run_detect(
     root = Path(root)
     out_dir = Path(out_dir)
 
-    specs = discover_frames(root, cfg)
+    valid_cameras = set(cfg.filename.camera_map.values())
+    if camera is not None and camera not in valid_cameras:
+        raise ValueError(
+            f"camera override {camera!r} is not one of the configured cameras "
+            f"{sorted(valid_cameras)}"
+        )
+
+    specs = discover_frames(root, cfg, sample_id=sample_id, camera=camera)
     _validate_calibration(specs, cfg)  # whole-run precondition; raises loudly, nothing written yet
 
     out_dir.mkdir(parents=True, exist_ok=True)

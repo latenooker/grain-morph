@@ -113,6 +113,16 @@ contour degrades a single grain's geometry, never the frame.
   `otsu`.
 - **Independent mask vs polygon** is why some metrics have both a polygon and a
   raster version (see `morphometrics.md` → Dual geometry).
+- **Identity comes from the filename, or from overrides.** Before any of the
+  above, `io.discover_frames`/`parse_name` decode each frame's `(sample_id,
+  camera, frame, blank?)` from its stem via `filename.sample_regex`.
+  `detect --sample-id`/`--camera` override those fields for every frame (see the
+  [README](../README.md#quickstart)): a field uses the override when given, else
+  the regex capture, and a file is processed only if both sample and camera
+  resolve. When overrides let an unmatched stem through (a single directory of
+  index-named frames), blank-vs-data is decided by `filename.blank_regex` and the
+  frame index by the stem's trailing digits — so `sample_regex` and `blank_regex`
+  are two blank markers that apply in mutually exclusive modes.
 
 ## Custom-vs-imported, honestly
 

@@ -121,6 +121,25 @@ frames that are new, changed, or missing from the manifest (`--force`
 reprocesses everything from a clean slate). Add `--jobs N` to override
 `runtime.n_jobs` for one run.
 
+**Single-sample directories (`--sample-id` / `--camera`).** By default every
+frame's identity is parsed from its filename via `filename.sample_regex`. When
+all frames for one sample sit in one directory and the filenames don't encode
+(or shouldn't dictate) that identity, stamp it directly:
+
+```bash
+grain-morph detect FRAMES OUT --config my_config.yaml --sample-id P_01 --camera basic
+```
+
+Either flag can be given on its own (the other field still comes from the
+filename) or both together. With both supplied, filenames need no identity
+tokens at all — they only have to differ, and a blank/background frame is
+recognized by a `back` in its name (configurable via `filename.blank_regex`).
+`--camera` must be one of your `filename.camera_map` values (e.g. `basic`/`zoom`);
+overriding to an uncalibrated camera still fails loudly, exactly as a
+filename-parsed one does. Overrides are authoritative for **every** discovered
+frame, so pointing `--sample-id` at a directory that actually mixes samples
+collapses them into one.
+
 ```bash
 # Optional: render selected frames' grain polygons over the image, colored
 # by QC outcome, downsampled for a compact PNG
@@ -151,6 +170,7 @@ An unrecognized key raises immediately (config models forbid extra fields).
 | `calibration.um_per_px.basic` / `.zoom` | Micrometers per pixel for each camera. Required -- `null` (the default) makes `detect` fail loudly before processing any frame. |
 | `filename.sample_regex` | Regex applied to a frame's filename stem, capturing `sample`, `cam`, and either `frame` (a frame index) or the literal `back` (a blank/background frame). |
 | `filename.camera_map` | Maps the single-letter camera code captured by `cam` (default `b`/`z`) to a full camera name (`basic`/`zoom`), matching the keys under `calibration.um_per_px`. |
+| `filename.blank_regex` | Blank/background marker used **only** on the `detect --sample-id`/`--camera` override path, for stems that don't match `sample_regex` (all frames in one directory named only by index). Default matches `back`, `x_back`, `x-back` case-insensitively. Ignored whenever `sample_regex` matches (blanks then come from its `back` alternation). |
 | `flatfield.method` | `auto` (blank-division when a paired blank exists, else morphological), `blank` (require a blank, error if missing), or `morphological` (grey-closing background estimate from the image itself). |
 | `flatfield.morph_kernel_px` | Structuring-element size (px) for the morphological background estimate. |
 | `threshold.method` | `half_max` (default) or `otsu`. |
