@@ -15,6 +15,11 @@ filename:
   # back-flat token from a frame's filename stem.
   sample_regex: '(?P<sample>.+?)_(?P<cam>[bz])_(?:(?P<frame>\d+)|back)$'
   camera_map: { b: basic, z: zoom }
+  # Blank/background marker used ONLY when `detect --sample-id/--camera`
+  # overrides identity for stems that don't match `sample_regex` (e.g. all
+  # frames in one directory named only by index). Matches `back`, `x_back`,
+  # `x-back` case-insensitively. Ignored when `sample_regex` matches.
+  blank_regex: '(?i)(?:^|[_-])back$'
 
 flatfield:
   method: auto # auto | blank | morphological

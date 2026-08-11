@@ -191,3 +191,37 @@ def test_detect_without_overview_writes_no_overviews_dir(tmp_path):
     )
     assert res.exit_code == 0, res.output
     assert not (out / "overviews").exists()
+
+
+def _structureless_run(tmp_path):
+    """One dir of index-named frames + a `back` blank, no identity tokens."""
+    run = tmp_path / "run"
+    run.mkdir()
+    iio.imwrite(run / "back.bmp", make_frame(size=(128, 128), objects=[]).image)
+    obj = [{"kind": "ellipse", "cx": 64, "cy": 64, "a": 18, "b": 18,
+            "angle": 0.0, "blur_sigma": 0.0}]
+    iio.imwrite(run / "0000001.bmp", make_frame(size=(128, 128), objects=obj).image)
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(yaml.safe_dump({"calibration": {"um_per_px": {"basic": 5.0, "zoom": 1.0}}}))
+    return run, tmp_path / "out", cfg
+
+
+def test_detect_cli_sample_and_camera_overrides(tmp_path):
+    run, out, cfg = _structureless_run(tmp_path)
+    args = ["detect", str(run), str(out), "--config", str(cfg), "--jobs", "1",
+            "--sample-id", "P1", "--camera", "basic"]
+    res = runner.invoke(app, args)
+    assert res.exit_code == 0, res.output
+    import pandas as pd
+    df = pd.read_parquet(out / "grains")
+    assert set(df["sample_id"].astype(str)) == {"P1"}
+    assert set(df["camera"].astype(str)) == {"basic"}
+
+
+def test_detect_cli_invalid_camera_rejected(tmp_path):
+    run, out, cfg = _structureless_run(tmp_path)
+    args = ["detect", str(run), str(out), "--config", str(cfg), "--jobs", "1",
+            "--sample-id", "P1", "--camera", "telescope"]
+    res = runner.invoke(app, args)
+    assert res.exit_code != 0
+    assert not out.exists()

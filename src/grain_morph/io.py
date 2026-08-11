@@ -79,39 +79,84 @@ class FrameSpec:
     blank_path: Path | None
 
 
-def parse_name(path: str | Path, cfg: Config) -> ParsedName | None:
+def parse_name(
+    path: str | Path,
+    cfg: Config,
+    *,
+    sample_id: str | None = None,
+    camera: str | None = None,
+) -> ParsedName | None:
     """Parse sample/camera/frame identity out of a frame's filename.
 
-    Applies ``cfg.filename.sample_regex`` to the filename stem (basename
-    without extension), then maps the captured camera code through
-    ``cfg.filename.camera_map``.
+    Resolution is **override-first, regex-second**. ``cfg.filename.sample_regex``
+    is applied to the filename stem (basename without extension); each identity
+    field then takes the explicit override when one is given, else the captured
+    value. A file is a processable frame only if *both* ``sample_id`` and
+    ``camera`` resolve to a non-``None`` value -- so with no overrides this
+    reduces to the historical behavior (skip anything the regex doesn't match).
+
+    When both overrides are supplied, a stem that the regex does *not* match is
+    still processable: its blank/data status comes from ``cfg.filename.
+    blank_regex`` and its frame index from the stem's trailing digits (this is
+    the "all frames in one directory, no identity tokens in the filename" case).
 
     Args:
         path: Path (or bare filename) of the frame image.
         cfg: Resolved pipeline configuration providing ``filename`` rules.
+        sample_id: If given, forces the sample id, ignoring any ``sample``
+            capture. Supplied by ``detect``'s ``--sample-id`` override.
+        camera: If given, forces the (already-mapped, e.g. ``"basic"``) camera,
+            ignoring any ``cam`` capture. Supplied by ``detect``'s ``--camera``
+            override.
 
     Returns:
-        A :class:`ParsedName` on a successful match, or ``None`` if the
-        stem does not match ``cfg.filename.sample_regex``.
+        A :class:`ParsedName` when both sample and camera resolve, or ``None``
+        (the file is skipped) otherwise.
     """
     stem = Path(path).stem
     match = re.match(cfg.filename.sample_regex, stem)
-    if match is None:
+    groups = match.groupdict() if match is not None else {}
+
+    resolved_sample = sample_id if sample_id is not None else groups.get("sample")
+    if camera is not None:
+        resolved_camera: str | None = camera
+    elif groups.get("cam") is not None:
+        resolved_camera = cfg.filename.camera_map[groups["cam"]]
+    else:
+        resolved_camera = None
+
+    if resolved_sample is None or resolved_camera is None:
         return None
 
-    groups = match.groupdict()
-    frame_group = groups.get("frame")
+    if match is not None:
+        frame_group = groups.get("frame")
+        run = groups.get("run")
+        is_blank = frame_group is None
+        frame_index = int(frame_group) if frame_group is not None else None
+    else:
+        # Override path: regex didn't match, but the overrides supplied identity.
+        run = None
+        is_blank = re.search(cfg.filename.blank_regex, stem) is not None
+        trailing = re.search(r"(\d+)$", stem)
+        frame_index = int(trailing.group(1)) if trailing is not None else None
+
     return ParsedName(
-        sample_id=groups["sample"],
-        run=groups.get("run"),
-        camera=cfg.filename.camera_map[groups["cam"]],
-        frame_index=int(frame_group) if frame_group is not None else None,
-        is_blank=frame_group is None,
+        sample_id=resolved_sample,
+        run=run,
+        camera=resolved_camera,
+        frame_index=frame_index,
+        is_blank=is_blank,
         stem=stem,
     )
 
 
-def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
+def discover_frames(
+    root: str | Path,
+    cfg: Config,
+    *,
+    sample_id: str | None = None,
+    camera: str | None = None,
+) -> list[FrameSpec]:
     """Recursively discover data frames under ``root`` and pair them to blanks.
 
     Walks ``root`` for files with a known image extension
@@ -135,6 +180,10 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
     Args:
         root: Directory to search recursively for image files.
         cfg: Resolved pipeline configuration providing ``filename`` rules.
+        sample_id: Optional sample-id override forwarded to :func:`parse_name`
+            for every file (see its docstring); ``None`` keeps filename parsing.
+        camera: Optional camera override forwarded to :func:`parse_name` for
+            every file; ``None`` keeps filename parsing.
 
     Returns:
         Data-frame specs sorted by ``(sample_id, run, camera, frame_index)``.
@@ -149,7 +198,7 @@ def discover_frames(root: str | Path, cfg: Config) -> list[FrameSpec]:
     data_frames: list[tuple[Path, ParsedName]] = []
     blanks: dict[tuple[str, str | None, str], Path] = {}
     for path in paths:
-        parsed = parse_name(path, cfg)
+        parsed = parse_name(path, cfg, sample_id=sample_id, camera=camera)
         if parsed is None:
             continue
         if parsed.is_blank:

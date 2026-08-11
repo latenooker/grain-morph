@@ -140,6 +140,26 @@ def detect(
         int,
         typer.Option("--overview-factor", help="Integer factor to downsample overview PNGs by."),
     ] = _DEFAULT_OVERLAY_FACTOR,
+    sample_id: Annotated[
+        str | None,
+        typer.Option(
+            "--sample-id",
+            help=(
+                "Force this sample id on every frame, ignoring the filename's "
+                "sample token. For single-sample directories."
+            ),
+        ),
+    ] = None,
+    camera: Annotated[
+        str | None,
+        typer.Option(
+            "--camera",
+            help=(
+                "Force this camera (e.g. basic/zoom) on every frame, ignoring "
+                "the filename's camera token. Must match a camera_map value."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run Stage 1 detection over every frame under FRAMES_DIR.
 
@@ -155,9 +175,23 @@ def detect(
             frame with >=1 detection) into OUT/overviews/. Outlines require
             the run's cfg.output.save_contours (default true).
         overview_factor: Integer factor to downsample overview PNGs by.
+        sample_id: Force this sample id on every frame, ignoring the
+            filename's sample token (single-sample directories). `None`
+            keeps filename parsing.
+        camera: Force this camera on every frame, ignoring the filename's
+            camera token. `None` keeps filename parsing.
     """
     cfg = load_config(config)
-    run_detect(frames_dir, out_dir, cfg, n_jobs=jobs, force=force)
+    if camera is not None and camera not in set(cfg.filename.camera_map.values()):
+        raise typer.BadParameter(
+            f"{camera!r} is not a configured camera "
+            f"(one of {sorted(set(cfg.filename.camera_map.values()))})",
+            param_hint="--camera",
+        )
+    run_detect(
+        frames_dir, out_dir, cfg, n_jobs=jobs, force=force,
+        sample_id=sample_id, camera=camera,
+    )
     if overview:
         _write_overviews(out_dir, frames_dir, cfg, overview_factor)
 

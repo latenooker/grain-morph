@@ -32,6 +32,13 @@ The filename encodes identity: `{sample}_{camera}_{frame-or-"back"}`. `_b_` =
 basic camera, `_z_` = zoom; `_back` = a blank frame the pipeline divides out to
 correct uneven illumination.
 
+> **All frames for one sample in a single directory, with no identity in the
+> filenames?** Pass it in instead: `detect … --sample-id P_01_cs --camera basic`
+> stamps every frame in the directory with that identity, so the filenames only
+> need to differ (a blank is recognized by a `back` in its name — see
+> `filename.blank_regex`). You can override just one of the two and let the
+> filename supply the other. See the [config reference](../README.md#config-reference).
+
 > **Because these are downsampled, the µm sizes below are illustrative, not
 > physical.** On real full-resolution frames you'd use your instrument's true
 > `um_per_px`. Everything about *how to run and read the pipeline* is identical.

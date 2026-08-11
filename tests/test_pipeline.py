@@ -150,6 +150,38 @@ def test_resume_after_frame_edit_replaces_not_duplicates(tmp_path):
     assert sorted(df2["grain_uid"]) == ["S1_b_0000001:1", "S1_b_0000001:2"]
 
 
+def test_overrides_stamp_identity_on_structureless_frames(tmp_path):
+    # All frames in one dir, named only by index (+ a `back` blank): identity
+    # comes from the run_detect overrides, and the grain rows carry it.
+    run = tmp_path / "run"
+    run.mkdir()
+    iio.imwrite(run / "back.bmp", make_frame(size=(256, 256), objects=[]).image)
+    obj = [{"kind": "ellipse", "cx": 128, "cy": 128, "a": 25, "b": 25,
+            "angle": 0.0, "blur_sigma": 0.0}]
+    iio.imwrite(run / "0000001.bmp", make_frame(size=(256, 256), objects=obj).image)
+    out = tmp_path / "out"
+
+    run_detect(run, out, _cfg_with_calib(), n_jobs=1, sample_id="P1", camera="basic")
+
+    if (out / "grains.parquet").exists():
+        df = read_table(out / "grains.parquet", "parquet")
+    else:
+        df = pd.read_parquet(out / "grains")
+    assert len(df) >= 1
+    assert set(df["sample_id"].astype(str)) == {"P1"}
+    assert set(df["camera"].astype(str)) == {"basic"}
+
+
+def test_invalid_camera_override_raises_before_processing(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    iio.imwrite(run / "0000001.bmp", make_frame(size=(64, 64), objects=[]).image)
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="camera"):
+        run_detect(run, out, _cfg_with_calib(), n_jobs=1, sample_id="P1", camera="telescope")
+    assert not out.exists()
+
+
 def test_uncalibrated_camera_raises_before_processing(tmp_path):
     # Review-fix regression test (Important bug 2): an uncalibrated camera
     # is a whole-run config precondition, not per-frame data corruption --

@@ -41,6 +41,33 @@ def test_appledouble_sidecar_ignored(frame_dir):
     assert all(not s.path.name.startswith(".") for s in specs)
 
 
+def test_overrides_single_structureless_dir(tmp_path):
+    """All images in one dir, no identity in the filenames: overrides supply it.
+
+    Frames named only by index plus a `back.bmp` blank -- none match the default
+    sample_regex -- are all attributed to one (sample, camera) via overrides,
+    and the blank pairs to the data frames.
+    """
+    import imageio.v3 as iio
+    import numpy as np
+
+    d = tmp_path / "frames"
+    d.mkdir()
+    bg = np.full((16, 16), 200, np.uint8)
+    iio.imwrite(d / "0000001.bmp", bg)
+    iio.imwrite(d / "0000002.bmp", bg)
+    iio.imwrite(d / "back.bmp", bg)
+
+    specs = discover_frames(d, load_config(None), sample_id="P1", camera="basic")
+    assert len(specs) == 2  # blank excluded from the data set
+    assert {s.parsed.frame_index for s in specs} == {1, 2}
+    for s in specs:
+        assert s.parsed.sample_id == "P1"
+        assert s.parsed.camera == "basic"
+        assert s.blank_path is not None
+        assert s.blank_path.name == "back.bmp"
+
+
 def test_blank_pairing_is_run_scoped(tmp_path):
     """Two runs of one sample+camera each pair to their OWN run's blank.
 

@@ -45,10 +45,17 @@ class FilenameConfig(_StrictModel):
         camera_map: Single-letter camera code (as captured by ``cam``) ->
             full camera name (matching the keys of
             ``calibration.um_per_px``).
+        blank_regex: Regex used *only* on the identity-override path -- when a
+            stem does not match ``sample_regex`` but ``detect``'s ``sample_id``/
+            ``camera`` overrides supply identity -- to tell a blank/background
+            frame from a data frame. When ``sample_regex`` itself matches, blank
+            detection comes from its ``frame``/``back`` alternation instead, so
+            the two are consulted in mutually exclusive modes.
     """
 
     sample_regex: str
     camera_map: dict[str, str]
+    blank_regex: str
 
 
 class FlatfieldConfig(_StrictModel):
