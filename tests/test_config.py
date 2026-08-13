@@ -9,7 +9,7 @@ def test_load_default_returns_config():
     cfg = load_config(None)
     assert isinstance(cfg, Config)
     assert cfg.threshold.method == "half_max"
-    assert cfg.output.format == "parquet"
+    assert cfg.output.format == "csv"
 
 
 def test_uncalibrated_camera_fails_loudly():

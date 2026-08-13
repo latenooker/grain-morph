@@ -27,7 +27,16 @@ FIX = Path("tests/fixtures/real")
 
 def test_detect_on_downsampled_real(tmp_path):
     cfg = tmp_path / "c.yaml"
-    cfg.write_text(yaml.safe_dump({"calibration": {"um_per_px": {"basic": 20.0, "zoom": 8.0}}}))
+    # Pin parquet: this test specifically exercises hive-partitioned-parquet
+    # column reconstruction (the pd.read_parquet below), not the csv default.
+    cfg.write_text(
+        yaml.safe_dump(
+            {
+                "calibration": {"um_per_px": {"basic": 20.0, "zoom": 8.0}},
+                "output": {"format": "parquet"},
+            }
+        )
+    )
     out = tmp_path / "out"
     res = runner.invoke(app, ["detect", str(FIX), str(out), "--config", str(cfg), "--jobs", "1"])
     assert res.exit_code == 0, res.output
