@@ -36,6 +36,7 @@ module grew past the ~250-line-per-module guideline.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import imageio.v3 as iio
@@ -44,7 +45,12 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage
 
-matplotlib.use("Agg")  # must precede `import matplotlib.pyplot` to take effect
+if not os.environ.get("MPLBACKEND"):
+    # Default to the headless backend (reports are written to disk, never shown),
+    # but let an explicit MPLBACKEND win -- importing this module must not clobber
+    # the interactive backend that `groundtruth` needs. Must precede the
+    # `matplotlib.pyplot` import to take effect.
+    matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 

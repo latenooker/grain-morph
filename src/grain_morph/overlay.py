@@ -27,6 +27,7 @@ headless (CI, a server with no display).
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import imageio.v3 as iio
@@ -39,7 +40,12 @@ from shapely.geometry import Polygon
 from skimage.draw import polygon_perimeter
 from skimage.transform import rescale
 
-matplotlib.use("Agg")  # must precede `import matplotlib.pyplot` to take effect
+if not os.environ.get("MPLBACKEND"):
+    # Default to the headless backend (overlays are written to disk, never shown),
+    # but let an explicit MPLBACKEND win -- importing this module must not clobber
+    # the interactive backend that `groundtruth` needs. Must precede the
+    # `matplotlib.pyplot` import to take effect.
+    matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
