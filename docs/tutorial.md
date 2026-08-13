@@ -160,9 +160,11 @@ Latin-hypercube sample across the QC-driving metrics. Press `1` to include, `0`
 to exclude, `2` for a special case (`m` toggles the mask, `i` reveals the
 predicted status, `q` saves and quits). Labels autosave to `out/groundtruth.csv`,
 keyed by `grain_uid`, so you can join them back to `out/grains` and see where the
-gate agrees or disagrees. Details: [`groundtruth.md`](groundtruth.md). *(Needs a
-desktop matplotlib backend; on a fixtures-only machine this is just to see the
-shape of the workflow.)*
+gate agrees or disagrees. Details: [`groundtruth.md`](groundtruth.md).
+
+*(Needs a desktop session and a GUI toolkit — the command selects an interactive
+backend itself, and errors out listing what it tried if none is installed. On a
+fixtures-only machine this is just to see the shape of the workflow.)*
 
 ## 7. The mental model
 

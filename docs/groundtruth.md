@@ -16,6 +16,9 @@ is written back into the `detect` output — labels live only in the CSV.
 grain-morph groundtruth OUT --n-frames 8 --n-grains 60 --seed 0 [--config c.yaml]
 ```
 
+No `MPLBACKEND` prefix needed — the command picks an interactive backend itself.
+See [Backend selection](#backend-selection) if it can't find one.
+
 `OUT` is a completed `detect` output directory (it reads `OUT/grains/` and
 `OUT/contours/`). Labels are written to `OUT/groundtruth.csv` (override with
 `--out`). If the frames have moved since `detect` (the grain rows store absolute
@@ -122,10 +125,37 @@ evidence behind the per-camera defocus/size gate changes proposed in
 | GUI | **imported** — matplotlib (image display + key events) |
 | Mask overlay geometry | **imported** — shapely polygon from stored WKT |
 
+## Backend selection
+
+`groundtruth` needs an **interactive matplotlib backend** and a desktop session.
+`_ensure_interactive_backend` handles this on launch, trying in order:
+
+| Platform | Order tried | Notes |
+|---|---|---|
+| macOS | `macosx` → `QtAgg` → `TkAgg` | `macosx` ships with matplotlib; nothing to install. |
+| Linux | `QtAgg` → `TkAgg` | Needs `pyqt` or `tkinter` present. |
+
+Two escape hatches:
+
+- **Force a specific backend** with `MPLBACKEND=QtAgg grain-morph groundtruth …`.
+  An explicit value is always respected and never overridden — including a
+  file-only one, so `MPLBACKEND=Agg` still errors out rather than being silently
+  "fixed". That keeps headless invocations and CI failing fast.
+- **No toolkit at all** raises a `RuntimeError` listing what was tried. Fix with
+  `conda install -c conda-forge pyqt`, or run somewhere with a display.
+
+Remote/headless machines (a cluster login node, an SSH session without X11) can't
+run this at all. If `detect` ran remotely, copy its output directory to a machine
+with a display and label there.
+
+**Why the automatic switch is needed.** `cli.py` imports `overlay.py` and
+`report.py` at module load, and both select `Agg` for their headless figure
+writing. So importing the CLI for *any* subcommand would otherwise leave
+`groundtruth` pinned to a backend that can't open a window.
+
 ## Requirements / notes
 
-- Needs an **interactive matplotlib backend** (a desktop session: macOS, TkAgg,
-  or QtAgg). Under a headless/file-only backend it fails with a clear message
-  rather than a traceback — e.g. run `MPLBACKEND=QtAgg grain-morph groundtruth …`.
+- Needs a desktop session and a GUI toolkit — see
+  [Backend selection](#backend-selection).
 - The mask is the run's **subpixel contour** (`OUT/contours/`), so `detect` must
   have run with `output.save_contours` (the default).

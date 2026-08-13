@@ -161,7 +161,9 @@ every frame" default.
 grain is shown zoomed with a toggleable polygon mask, and `0`/`1`/`2` assign
 exclude/include/special by keystroke into a resumable `OUT/groundtruth.csv`
 (keyed by `grain_uid`, so it joins back to `grains` to score predicted vs
-hand-labeled). See [`docs/groundtruth.md`](docs/groundtruth.md).
+hand-labeled). It's the only command that opens a window, so it needs a desktop
+session and a GUI toolkit; it selects an interactive backend itself (override
+with `MPLBACKEND`). See [`docs/groundtruth.md`](docs/groundtruth.md).
 
 Another command, `grain-morph make-fixtures SRC DEST --factor N`,
 anti-aliased-downsamples a directory of frames by an integer factor

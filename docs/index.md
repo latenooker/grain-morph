@@ -51,8 +51,8 @@ grain-morph groundtruth OUT [--n-frames N --n-grains M --seed S] [--config c.yam
 
 `detect --overview` renders QC-colored overlay PNGs for every frame with a
 detection into `OUT/overviews/`. `groundtruth` opens a labeling GUI over a
-Latin-hypercube sample of grains to hand-check the QC gate (see
-[`groundtruth.md`](groundtruth.md)).
+Latin-hypercube sample of grains to hand-check the QC gate — the only command
+needing a desktop session (see [`groundtruth.md`](groundtruth.md)).
 
 ## Conventions (repeated in each doc)
 
