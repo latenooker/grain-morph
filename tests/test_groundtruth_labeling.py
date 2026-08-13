@@ -6,6 +6,8 @@ import pytest
 from grain_morph.config import load_config
 from grain_morph.groundtruth import (
     _crop_bbox,
+    _ensure_interactive_backend,
+    _interactive_backend_candidates,
     _LabelSession,
     _LabelStore,
     _predicted_status,
@@ -145,3 +147,54 @@ def test_require_interactive_backend_rejects_agg():
 
 def test_require_interactive_backend_allows_qtagg():
     _require_interactive_backend("QtAgg")  # no raise
+
+
+def test_interactive_candidates_offer_macosx_only_on_darwin(monkeypatch):
+    monkeypatch.setattr("grain_morph.groundtruth.sys.platform", "darwin")
+    assert _interactive_backend_candidates()[0] == "macosx"
+
+    monkeypatch.setattr("grain_morph.groundtruth.sys.platform", "linux")
+    assert "macosx" not in _interactive_backend_candidates()
+
+
+def test_ensure_backend_keeps_an_already_interactive_backend(monkeypatch):
+    """No switching when the active backend can already open a window."""
+    monkeypatch.setattr("matplotlib.get_backend", lambda: "QtAgg")
+
+    def _fail(_name):
+        raise AssertionError("must not switch away from an interactive backend")
+
+    monkeypatch.setattr("matplotlib.pyplot.switch_backend", _fail)
+    assert _ensure_interactive_backend() == "QtAgg"
+
+
+def test_ensure_backend_switches_away_from_agg(monkeypatch):
+    """Agg inherited from the overlay/report imports gets replaced silently."""
+    monkeypatch.delenv("MPLBACKEND", raising=False)
+    state = {"backend": "agg"}
+    monkeypatch.setattr("matplotlib.get_backend", lambda: state["backend"])
+    monkeypatch.setattr(
+        "matplotlib.pyplot.switch_backend",
+        lambda name: state.__setitem__("backend", name),
+    )
+    assert _ensure_interactive_backend() not in ("agg", "Agg")
+
+
+def test_ensure_backend_respects_an_explicit_headless_mplbackend(monkeypatch):
+    """An operator who asks for Agg gets the clear error, not a silent override."""
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+    monkeypatch.setattr("matplotlib.get_backend", lambda: "agg")
+    with pytest.raises(RuntimeError, match="interactive"):
+        _ensure_interactive_backend()
+
+
+def test_ensure_backend_raises_when_no_toolkit_available(monkeypatch):
+    monkeypatch.delenv("MPLBACKEND", raising=False)
+    monkeypatch.setattr("matplotlib.get_backend", lambda: "agg")
+
+    def _no_toolkit(name):
+        raise ImportError(f"no {name}")
+
+    monkeypatch.setattr("matplotlib.pyplot.switch_backend", _no_toolkit)
+    with pytest.raises(RuntimeError, match="none could be loaded"):
+        _ensure_interactive_backend()

@@ -13,6 +13,9 @@ and draws.
 
 from __future__ import annotations
 
+import logging
+import os
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +29,8 @@ from shapely import wkt as _wkt
 
 from grain_morph.config import Config, load_config
 from grain_morph.io import _IMAGE_EXTENSIONS, read_contours, read_grains
+
+_LOGGER = logging.getLogger(__name__)
 
 _FLAG_COLUMNS = (
     "flag_defocus",
@@ -426,6 +431,68 @@ def _require_interactive_backend(backend: str) -> None:
         )
 
 
+def _interactive_backend_candidates() -> tuple[str, ...]:
+    """Interactive matplotlib backends to try, best-first for this platform.
+
+    Returns:
+        Backend names in preference order. ``macosx`` ships with matplotlib on
+        Darwin and needs no toolkit install, so it leads there; elsewhere it is
+        omitted entirely.
+    """
+    if sys.platform == "darwin":
+        return ("macosx", "QtAgg", "TkAgg")
+    return ("QtAgg", "TkAgg")
+
+
+def _ensure_interactive_backend() -> str:
+    """Switch to an interactive matplotlib backend if the active one is file-only.
+
+    Importing ``grain_morph.cli`` pulls in ``overlay`` and ``report``, which
+    select ``Agg`` for their headless figure writing. That would otherwise leave
+    ``groundtruth`` stuck on a backend that can't open a window, so pick a real
+    one here instead of making every caller prefix ``MPLBACKEND=``.
+
+    An explicit ``MPLBACKEND`` in the environment is always respected -- if the
+    operator named a file-only backend they get the usual error rather than a
+    silent override, which keeps headless invocations failing fast.
+
+    Returns:
+        The name of the active interactive backend.
+
+    Raises:
+        RuntimeError: If ``MPLBACKEND`` names a non-interactive backend, or if no
+            candidate backend could be imported (no GUI toolkit installed).
+    """
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    current = matplotlib.get_backend()
+    if current.lower() not in _NON_INTERACTIVE_BACKENDS:
+        return current
+
+    if os.environ.get("MPLBACKEND"):
+        _require_interactive_backend(current)  # explicit choice -- don't second-guess
+        return current
+
+    failures: list[str] = []
+    for candidate in _interactive_backend_candidates():
+        try:
+            plt.switch_backend(candidate)
+        except Exception as exc:  # ImportError, or a toolkit with no display
+            failures.append(f"{candidate} ({type(exc).__name__}: {exc})")
+            continue
+        resolved = matplotlib.get_backend()
+        _LOGGER.info("switched matplotlib backend %s -> %s", current, resolved)
+        return resolved
+
+    raise RuntimeError(
+        "groundtruth needs an interactive matplotlib backend and none could be "
+        "loaded. Tried: " + "; ".join(failures) + ". Install a GUI toolkit "
+        "(`conda install -c conda-forge pyqt`) and/or run in a desktop session. "
+        "To force a specific backend, set MPLBACKEND."
+    )
+
+
 def _resolve_frame_path(row: dict, frames_dir: str | Path | None) -> Path:
     """Locate a grain's source frame, preferring ``frames_dir`` if given.
 
@@ -536,10 +603,9 @@ def _launch_gui(
     frames_dir: str | Path | None,
 ) -> None:
     """Bind keystrokes to ``session`` and drive the one-grain matplotlib view."""
-    import matplotlib
     import matplotlib.pyplot as plt
 
-    _require_interactive_backend(matplotlib.get_backend())
+    _ensure_interactive_backend()
 
     key_to_class = {c.key: (c.value, c.name) for c in cfg.groundtruth.classes}
     key_help = ", ".join(f"{c.key}={c.name}" for c in cfg.groundtruth.classes)
