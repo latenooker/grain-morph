@@ -16,6 +16,11 @@ from tests.synth import make_frame
 def _cfg_with_calib():
     cfg = load_config(None)
     cfg.calibration.um_per_px = {"basic": 5.0, "zoom": 1.0}
+    # These tests assert on parquet output specifics (hive-partitioned grains
+    # dir, `manifest.parquet` byte-reproducibility, force-clean of a partitioned
+    # dataset), so pin the format here rather than ride the packaged default
+    # (now csv). The csv default path is covered by the CLI/groundtruth tests.
+    cfg.output.format = "parquet"
     return cfg
 
 

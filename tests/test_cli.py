@@ -212,8 +212,10 @@ def test_detect_cli_sample_and_camera_overrides(tmp_path):
             "--sample-id", "P1", "--camera", "basic"]
     res = runner.invoke(app, args)
     assert res.exit_code == 0, res.output
-    import pandas as pd
-    df = pd.read_parquet(out / "grains")
+    # Format-agnostic read (exercises the csv default via read_grains).
+    from grain_morph.config import load_config
+    from grain_morph.io import read_grains
+    df = read_grains(out / "grains", load_config(cfg))
     assert set(df["sample_id"].astype(str)) == {"P1"}
     assert set(df["camera"].astype(str)) == {"basic"}
 

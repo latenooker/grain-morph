@@ -53,9 +53,11 @@ qc:
   disqualifying_flags: [flag_defocus, flag_border, flag_too_small, flag_sliver, flag_no_polygon]
 
 output:
-  format: parquet # parquet | csv | feather
+  # csv by default: text, human-inspectable, opens anywhere. For lossless dtype
+  # round-trips (and hive partitioning, below) switch to parquet or feather.
+  format: csv # csv | parquet | feather
   save_contours: true
-  partition: true
+  partition: true # parquet-only; ignored for csv/feather (one file per frame)
 
 runtime:
   n_jobs: -1 # -1 = all cores; run_detect(n_jobs=...) / CLI --jobs override this

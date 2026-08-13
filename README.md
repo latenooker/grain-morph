@@ -200,9 +200,9 @@ An unrecognized key raises immediately (config models forbid extra fields).
 | `qc.sliver_max_ecd_px` | Only objects at or below this ECD (px) are eligible for `flag_sliver`. |
 | `qc.agglomerate_solidity_max` | Solidity below which `flag_possible_agglomerate` is set. |
 | `qc.disqualifying_flags` | Flag names that `aggregate` treats as disqualifying (i.e. `qc_pass = False`) by default. |
-| `output.format` | Tabular output format: `parquet`, `csv`, or `feather`. Parquet/feather are lossless; CSV is a lossy, text-based inspection fallback. |
+| `output.format` | Tabular output format: `csv` (**default** — text, human-inspectable, opens anywhere), `parquet`, or `feather`. Parquet/feather are lossless dtype round-trips and support hive partitioning; CSV is text and slightly lossy (see `output.partition`). |
 | `output.save_contours` | Whether subpixel boundary polygons (WKT) are persisted alongside the per-grain measurements. |
-| `output.partition` | Whether parquet output is written hive-partitioned by `(sample_id, camera)`. |
+| `output.partition` | Whether parquet output is written hive-partitioned by `(sample_id, camera)`. Parquet-only — ignored for the default `csv` (and `feather`), which write one file per frame. |
 | `runtime.n_jobs` | Worker processes `joblib.Parallel` uses to process frames (`-1` = all cores). Overridden per call by `--jobs` / `run_detect(n_jobs=...)`. |
 | `groundtruth.classes` | Keystroke-assignable label classes for the `groundtruth` GUI (default `0`=exclude/`1`=include/`2`=special). |
 | `groundtruth.lhs_axes` | Continuous grain-table metrics the Latin-hypercube sample spans (the values the QC gate thresholds on). |
