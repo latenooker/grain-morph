@@ -1,5 +1,5 @@
-"""Typer CLI: `detect`, `aggregate`, `report`, `overlay`, and `make-fixtures`
-commands.
+"""Typer CLI: `detect`, `aggregate`, `report`, `overlay`, `groundtruth`, and
+`make-fixtures` commands.
 
 Thin argument-wiring layer only — every command loads a resolved `Config`
 via `grain_morph.config.load_config` and delegates straight to the
@@ -19,16 +19,22 @@ from typing import Annotated
 
 import imageio.v3 as iio
 import numpy as np
-import pandas as pd
 import typer
 from skimage.transform import downscale_local_mean
 
 from grain_morph.aggregate import aggregate_run
 from grain_morph.config import Config, load_config
+from grain_morph.groundtruth import run_groundtruth
+from grain_morph.io import read_contours, read_grains
 from grain_morph.overlay import make_overlays
 from grain_morph.pipeline import run_detect
 from grain_morph.report import make_reports
-from grain_morph.writers import read_table, write_table
+from grain_morph.writers import write_table
+
+# Shared readers live in `io` so `cli` and `groundtruth` reuse them without a
+# circular import; keep the historical private names as thin aliases.
+_read_grains = read_grains
+_read_overlay_contours = read_contours
 
 app = typer.Typer(
     help="Classical-CV morphometry + QC pipeline for backlit silhouette grain images."
@@ -47,60 +53,6 @@ _DEFAULT_OVERLAY_FACTOR = 4
 
 # How many available frame ids to show in the "--frames is required" hint.
 _OVERLAY_FRAME_HINT_N = 5
-
-# Mirrors `grain_morph.writers._EXTENSIONS` (and `pipeline._EXTENSIONS`,
-# which duplicates it for the same reason). Duplicated rather than imported
-# because that mapping is a private module attribute of `writers` -- this is
-# the one place `cli.py` needs to predict a grains-directory's per-frame
-# file extension before globbing for it.
-_EXTENSIONS = {"parquet": ".parquet", "csv": ".csv", "feather": ".feather"}
-
-
-def _read_grains(path: Path, cfg: Config) -> pd.DataFrame | None:
-    """Load a per-grain table from either a grains root or a single file.
-
-    A `detect` run that found zero objects never creates `out_dir /
-    "grains"` at all (see `pipeline.run_detect`'s docstring) -- an ordinary,
-    valid outcome (a blank-only sample, a mis-pointed frames dir, a
-    calibration batch with no particles), not an error. This returns `None`
-    for that case (a missing `path`, or a grains directory with no per-frame
-    table files under it) rather than raising, so callers can print a clear
-    message and exit cleanly instead of a `FileNotFoundError` traceback.
-
-    Args:
-        path: A grains root directory (e.g. `out_dir / "grains"` from a
-            `detect` run), or a single table file.
-        cfg: Resolved pipeline configuration; `cfg.output.format` selects
-            which per-frame file extension a grains-root directory is
-            globbed for, and which format a single file is read as.
-
-    Returns:
-        The loaded per-grain table, or `None` if `path` doesn't exist or is
-        a directory with no matching per-frame table files under it.
-    """
-    if not path.exists():
-        return None
-    fmt = cfg.output.format
-    if not path.is_dir():
-        return read_table(path, fmt)
-    if fmt == "parquet":
-        # `pandas.read_parquet` on a directory transparently unions every
-        # part file under it, hive-partitioned or not -- the one format
-        # whose leaf files may *not* carry `sample_id`/`camera` as columns
-        # of their own (see `writers.write_partitioned`'s docstring), so
-        # only a whole-directory read reconstructs them.
-        if not any(path.rglob(f"*{_EXTENSIONS[fmt]}")):
-            return None
-        return pd.read_parquet(path)
-    # csv/feather grains directories are always a flat set of per-frame
-    # files that each already carry every column (including `sample_id`/
-    # `camera`) inline -- `pipeline._grain_leaf_path` never drops them for
-    # these formats -- so unioning them is a plain per-file read + concat.
-    files = sorted(path.rglob(f"*{_EXTENSIONS[fmt]}"))
-    if not files:
-        return None
-    return pd.concat([read_table(f, fmt) for f in files], ignore_index=True)
-
 
 _ConfigOpt = Annotated[
     Path | None,
@@ -257,37 +209,6 @@ def report(
         )
         return
     make_reports(grains, frames_dir, out_dir, cfg)
-
-
-def _read_overlay_contours(run_dir: Path, frame_ids: list[str], cfg: Config) -> pd.DataFrame:
-    """Concatenate per-frame contour tables for the requested frames.
-
-    Contours are never partitioned (`pipeline._write_or_clear_contour_frame`
-    always writes `contours/{frame_id}.<ext>`), so each requested frame maps
-    to exactly one candidate file path.
-
-    Args:
-        run_dir: Completed `detect` output directory (has `contours/`).
-        frame_ids: Frame ids (stems) to read contours for.
-        cfg: Resolved pipeline configuration; `cfg.output.format` selects
-            the per-frame contour file's extension.
-
-    Returns:
-        `grain_uid, wkt, um_per_px` rows for every requested frame whose
-        contour file exists; a frame with no contour file (`save_contours`
-        was off for that run, or the frame had zero objects) is silently
-        skipped, not an error. An empty, correctly-columned frame if none
-        of the requested frames have one.
-    """
-    ext = _EXTENSIONS[cfg.output.format]
-    frames = [
-        read_table(path, cfg.output.format)
-        for fid in frame_ids
-        if (path := run_dir / "contours" / f"{fid}{ext}").exists()
-    ]
-    if not frames:
-        return pd.DataFrame(columns=["grain_uid", "wkt", "um_per_px"])
-    return pd.concat(frames, ignore_index=True)
 
 
 def _write_overviews(run_dir: Path, frames_dir: Path, cfg: Config, factor: int) -> None:
@@ -468,3 +389,65 @@ def make_fixtures(
     for path in sorted(src_dir.iterdir()):
         if path.is_file():
             _downsample_image(path, dest_dir / path.name, factor)
+
+
+@app.command()
+def groundtruth(
+    run_dir: Annotated[
+        Path, typer.Argument(help="Completed `detect` output directory.")
+    ],
+    config: _ConfigOpt = None,
+    n_frames: Annotated[
+        int | None, typer.Option("--n-frames", help="Draw the grain pool from this many frames.")
+    ] = None,
+    frac_frames: Annotated[
+        float | None,
+        typer.Option("--frac-frames", help="Fraction of frames for the pool."),
+    ] = None,
+    n_grains: Annotated[
+        int | None, typer.Option("--n-grains", help="Number of grains to label.")
+    ] = None,
+    frac_grains: Annotated[
+        float | None,
+        typer.Option("--frac-grains", help="Fraction of the pool to label (if --n-grains unset)."),
+    ] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Seed for reproducible sampling.")] = 0,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Labels CSV path (default RUN_DIR/groundtruth.csv)."),
+    ] = None,
+    frames_dir: Annotated[
+        Path | None,
+        typer.Option("--frames-dir", help="Relocate source frames if stored paths are stale."),
+    ] = None,
+) -> None:
+    """Label sampled grains (zoomed view + toggleable mask) to groundtruth QC.
+
+    Opens a matplotlib window over a Latin-hypercube sample (across the
+    continuous QC-driving metrics) of RUN_DIR's grains: one grain at a time,
+    keystroke class assignment (default `0`=exclude/`1`=include/`2`=special),
+    `m` toggles the mask, `n`/`p` navigate, `i` reveals predicted QC status,
+    `q` saves and quits. Labels autosave and the session resumes on relaunch.
+
+    Args:
+        run_dir: Completed `detect` output directory (`grains/` + `contours/`).
+        config: Optional user config YAML overriding the packaged defaults.
+        n_frames: Draw the grain pool from this many frames (None = all).
+        frac_frames: Fraction of frames for the pool (if `n_frames` unset).
+        n_grains: Number of grains to label (None = the whole pool).
+        frac_grains: Fraction of the pool to label (if `n_grains` unset).
+        seed: Seed for reproducible sampling.
+        out: Labels CSV path (default RUN_DIR/groundtruth.csv).
+        frames_dir: Directory to relocate source frames from if stale.
+    """
+    run_groundtruth(
+        run_dir,
+        n_frames=n_frames,
+        frac_frames=frac_frames,
+        n_grains=n_grains,
+        frac_grains=frac_grains,
+        seed=seed,
+        config=config,
+        out=out,
+        frames_dir=frames_dir,
+    )

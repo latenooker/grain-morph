@@ -20,6 +20,80 @@ from grain_morph.config import Config
 from grain_morph.writers import read_table, write_table
 
 _IMAGE_EXTENSIONS = (".bmp", ".png", ".tif", ".tiff")
+_TABLE_EXTENSIONS = {"parquet": ".parquet", "csv": ".csv", "feather": ".feather"}
+
+
+def read_grains(path: str | Path, cfg: Config) -> pd.DataFrame | None:
+    """Load a per-grain table from either a grains root or a single file.
+
+    A `detect` run that found zero objects never creates `out_dir / "grains"`
+    at all (see `pipeline.run_detect`) -- an ordinary, valid outcome, not an
+    error. This returns `None` for that case (a missing `path`, or a grains
+    directory with no per-frame table files under it) rather than raising, so
+    callers can print a clear message and exit cleanly.
+
+    Args:
+        path: A grains root directory (e.g. `out_dir / "grains"`), or a single
+            table file.
+        cfg: Resolved configuration; `cfg.output.format` selects the per-frame
+            file extension globbed for, and the format a single file is read as.
+
+    Returns:
+        The loaded per-grain table, or `None` if `path` doesn't exist or is a
+        directory with no matching per-frame table files under it.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    fmt = cfg.output.format
+    if not path.is_dir():
+        return read_table(path, fmt)
+    if fmt == "parquet":
+        # `pandas.read_parquet` on a directory transparently unions every part
+        # file under it, hive-partitioned or not -- the one format whose leaf
+        # files may *not* carry `sample_id`/`camera` inline (see
+        # `writers.write_partitioned`), so only a whole-directory read
+        # reconstructs them.
+        if not any(path.rglob(f"*{_TABLE_EXTENSIONS[fmt]}")):
+            return None
+        return pd.read_parquet(path)
+    # csv/feather grains directories are a flat set of per-frame files that each
+    # carry every column inline, so unioning them is a per-file read + concat.
+    files = sorted(path.rglob(f"*{_TABLE_EXTENSIONS[fmt]}"))
+    if not files:
+        return None
+    return pd.concat([read_table(f, fmt) for f in files], ignore_index=True)
+
+
+def read_contours(run_dir: str | Path, frame_ids: list[str], cfg: Config) -> pd.DataFrame:
+    """Concatenate per-frame contour tables for the requested frames.
+
+    Contours are never partitioned (`pipeline._write_or_clear_contour_frame`
+    always writes `contours/{frame_id}.<ext>`), so each requested frame maps to
+    exactly one candidate file path.
+
+    Args:
+        run_dir: Completed `detect` output directory (has `contours/`).
+        frame_ids: Frame ids (stems) to read contours for.
+        cfg: Resolved configuration; `cfg.output.format` selects the per-frame
+            contour file's extension.
+
+    Returns:
+        `grain_uid, wkt, um_per_px` rows for every requested frame whose contour
+        file exists; a frame with no contour file (`save_contours` off, or zero
+        objects) is silently skipped. An empty, correctly-columned frame if none
+        of the requested frames have one.
+    """
+    run_dir = Path(run_dir)
+    ext = _TABLE_EXTENSIONS[cfg.output.format]
+    frames = [
+        read_table(path, cfg.output.format)
+        for fid in frame_ids
+        if (path := run_dir / "contours" / f"{fid}{ext}").exists()
+    ]
+    if not frames:
+        return pd.DataFrame(columns=["grain_uid", "wkt", "um_per_px"])
+    return pd.concat(frames, ignore_index=True)
 _MANIFEST_COLUMNS = (
     "frame_id",
     "frame_path",
