@@ -18,6 +18,7 @@ example frames committed in this repo (no hardware or external data needed).
 - [`docs/delineation.md`](docs/delineation.md) — how frames become grain outlines
 - [`docs/morphometrics.md`](docs/morphometrics.md) — every metric's formula + which library computes it
 - [`docs/qc.md`](docs/qc.md) — QC metrics, flags, and the accept/reject gate
+- [`docs/groundtruth.md`](docs/groundtruth.md) — the `groundtruth` labeling GUI (hand-check/tune the QC gate)
 - [`docs/aggregation.md`](docs/aggregation.md) — the summary tables
 - [`docs/followups.md`](docs/followups.md) — **known limitations & open work** (read before assuming a rough edge is a bug)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup, conventions, workflow
@@ -154,7 +155,15 @@ exactly registered to the image regardless of `--factor`. `--frames` is
 required (a comma-separated list of frame ids/stems); there is no "render
 every frame" default.
 
-A fifth command, `grain-morph make-fixtures SRC DEST --factor N`,
+**Groundtruthing the QC gate.** `grain-morph groundtruth OUT --n-frames 8
+--n-grains 60` opens a lightweight labeling GUI over a Latin-hypercube sample
+(across the continuous QC-driving metrics) of a completed run's grains: each
+grain is shown zoomed with a toggleable polygon mask, and `0`/`1`/`2` assign
+exclude/include/special by keystroke into a resumable `OUT/groundtruth.csv`
+(keyed by `grain_uid`, so it joins back to `grains` to score predicted vs
+hand-labeled). See [`docs/groundtruth.md`](docs/groundtruth.md).
+
+Another command, `grain-morph make-fixtures SRC DEST --factor N`,
 anti-aliased-downsamples a directory of frames by an integer factor
 (filenames preserved) -- used to build the small committed test fixtures
 under `tests/fixtures/real/`; not part of the analysis pipeline itself.
@@ -195,6 +204,12 @@ An unrecognized key raises immediately (config models forbid extra fields).
 | `output.save_contours` | Whether subpixel boundary polygons (WKT) are persisted alongside the per-grain measurements. |
 | `output.partition` | Whether parquet output is written hive-partitioned by `(sample_id, camera)`. |
 | `runtime.n_jobs` | Worker processes `joblib.Parallel` uses to process frames (`-1` = all cores). Overridden per call by `--jobs` / `run_detect(n_jobs=...)`. |
+| `groundtruth.classes` | Keystroke-assignable label classes for the `groundtruth` GUI (default `0`=exclude/`1`=include/`2`=special). |
+| `groundtruth.lhs_axes` | Continuous grain-table metrics the Latin-hypercube sample spans (the values the QC gate thresholds on). |
+| `groundtruth.reserved` | Minimum grains reserved for the boolean QC flags with no continuous axis (`{border, no_polygon}`). |
+| `groundtruth.crop_pad_px` | Padding (px) around a grain's polygon bbox in its zoomed view. |
+| `groundtruth.mask_alpha` | Opacity of the translucent polygon-mask fill overlay. |
+| `groundtruth.show_predicted_status` | Whether predicted QC status shows by default (toggle live with `i`; `false` keeps labels unbiased). |
 
 ## How the QC gate works, and how to tune it
 

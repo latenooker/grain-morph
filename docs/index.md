@@ -33,6 +33,7 @@ looser QC gate is a cheap re-run of aggregation, not a re-detection.
 | [`delineation.md`](delineation.md) | flat-field → threshold → label → **subpixel boundary** → repair |
 | [`morphometrics.md`](morphometrics.md) | every per-grain calculation + custom/imported provenance |
 | [`qc.md`](qc.md) | focus/contrast metrics, flags, the accept/reject gate |
+| [`groundtruth.md`](groundtruth.md) | the `groundtruth` labeling GUI — hand-label grains to validate/tune the QC gate |
 | [`aggregation.md`](aggregation.md) | per-(sample,camera) & per-frame summaries, ECD rejection binning |
 | [`followups.md`](followups.md) | open work: per-camera defocus/size gates, `flag_debris`, performance |
 | [`handoff.md`](handoff.md) | **state of the project** — what's done, what's open, priorities |
@@ -45,10 +46,13 @@ grain-morph detect  FRAMES_DIR OUT [--config c.yaml] [--jobs N] [--overview]
 grain-morph aggregate OUT/grains AGG_OUT [--config c.yaml]
 grain-morph report  OUT/grains FRAMES_DIR REP_OUT [--config c.yaml]
 grain-morph overlay OUT FRAMES_DIR OVL_OUT --frames id1,id2 [--config c.yaml]
+grain-morph groundtruth OUT [--n-frames N --n-grains M --seed S] [--config c.yaml]
 ```
 
 `detect --overview` renders QC-colored overlay PNGs for every frame with a
-detection into `OUT/overviews/`.
+detection into `OUT/overviews/`. `groundtruth` opens a labeling GUI over a
+Latin-hypercube sample of grains to hand-check the QC gate (see
+[`groundtruth.md`](groundtruth.md)).
 
 ## Conventions (repeated in each doc)
 

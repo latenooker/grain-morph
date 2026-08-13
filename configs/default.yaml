@@ -59,3 +59,19 @@ output:
 
 runtime:
   n_jobs: -1 # -1 = all cores; run_detect(n_jobs=...) / CLI --jobs override this
+
+groundtruth:
+  # Keystroke-assignable classes for the `groundtruth` labeling GUI.
+  classes:
+    - { key: '0', value: 0, name: exclude }
+    - { key: '1', value: 1, name: include }
+    - { key: '2', value: 2, name: special }
+  # Continuous grain-table metrics the Latin-hypercube sample spans -- exactly
+  # the values the QC gate thresholds on, so labels inform each cut.
+  lhs_axes: [ecd_px, edge_width_px, contrast, qc_aspect_ratio, qc_solidity]
+  # Minimum grains reserved for the boolean QC flags with no continuous axis
+  # (filled when present in the pool, before the hypercube draws the rest).
+  reserved: { border: 2, no_polygon: 1 }
+  crop_pad_px: 24 # padding around a grain's polygon bbox in its zoomed view
+  mask_alpha: 0.35 # opacity of the translucent polygon-mask fill
+  show_predicted_status: false # keep labels unbiased; toggle live with `i`

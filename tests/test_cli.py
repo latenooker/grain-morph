@@ -225,3 +225,10 @@ def test_detect_cli_invalid_camera_rejected(tmp_path):
     res = runner.invoke(app, args)
     assert res.exit_code != 0
     assert not out.exists()
+
+
+def test_groundtruth_cli_registered(tmp_path):
+    res = runner.invoke(app, ["groundtruth", "--help"])
+    assert res.exit_code == 0, res.output
+    assert "--sample-id" not in res.output  # it's detect's flag, not groundtruth's
+    assert "--n-grains" in res.output

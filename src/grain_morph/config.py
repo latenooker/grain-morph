@@ -190,6 +190,48 @@ class RuntimeConfig(_StrictModel):
     n_jobs: int
 
 
+class LabelClass(_StrictModel):
+    """One keystroke-assignable ground-truth class for the labeling GUI.
+
+    Attributes:
+        key: Single keystroke that assigns this class (e.g. ``"0"``).
+        value: Integer label written to ``groundtruth.csv``.
+        name: Human-readable class name (e.g. ``"exclude"``).
+    """
+
+    key: str
+    value: int
+    name: str
+
+
+class GroundtruthConfig(_StrictModel):
+    """Settings for the ``groundtruth`` grain-labeling GUI.
+
+    Attributes:
+        classes: Keystroke-assignable label classes (default 0/1/2 =
+            exclude/include/special).
+        lhs_axes: Grain-table columns spanned by the Latin-hypercube sample --
+            the continuous metrics the QC gate thresholds on.
+        reserved: Minimum sampled grains to reserve for the boolean QC flags
+            that have no continuous axis, as ``{"border": int,
+            "no_polygon": int}`` (filled when present in the pool before the
+            hypercube draws the remainder).
+        crop_pad_px: Padding (pixels) added around a grain's polygon bounding
+            box when cropping its zoomed view.
+        mask_alpha: Opacity of the translucent polygon-mask fill overlay.
+        show_predicted_status: Whether the predicted QC accept/reject status is
+            shown by default (``False`` keeps labels unbiased; toggled live
+            with the ``i`` key regardless).
+    """
+
+    classes: list[LabelClass]
+    lhs_axes: list[str]
+    reserved: dict[str, int]
+    crop_pad_px: int
+    mask_alpha: float
+    show_predicted_status: bool
+
+
 class Config(_StrictModel):
     """Fully resolved, validated grain-morph pipeline configuration.
 
@@ -203,6 +245,7 @@ class Config(_StrictModel):
         qc: Quality-control thresholds.
         output: Output table settings.
         runtime: Execution/parallelization settings.
+        groundtruth: Grain-labeling GUI settings.
     """
 
     calibration: CalibrationConfig
@@ -214,6 +257,7 @@ class Config(_StrictModel):
     qc: QCConfig
     output: OutputConfig
     runtime: RuntimeConfig
+    groundtruth: GroundtruthConfig
 
     def um_per_px(self, camera: str) -> float:
         """Look up the calibrated micrometers-per-pixel scale for a camera.

@@ -146,6 +146,24 @@ full QC review set (focus scatter, rejected-grain contact sheets):
 uv run grain-morph report out/grains tests/fixtures/real out/report --config tutorial.yaml
 ```
 
+## 6b. Groundtruth the QC gate (optional)
+
+Want to check whether the gate is accepting/rejecting the right grains? Label a
+sample by hand:
+
+```bash
+uv run grain-morph groundtruth out --n-grains 12 --seed 0 --config tutorial.yaml
+```
+
+A window shows one grain at a time (zoomed, with its polygon mask) drawn from a
+Latin-hypercube sample across the QC-driving metrics. Press `1` to include, `0`
+to exclude, `2` for a special case (`m` toggles the mask, `i` reveals the
+predicted status, `q` saves and quits). Labels autosave to `out/groundtruth.csv`,
+keyed by `grain_uid`, so you can join them back to `out/grains` and see where the
+gate agrees or disagrees. Details: [`groundtruth.md`](groundtruth.md). *(Needs a
+desktop matplotlib backend; on a fixtures-only machine this is just to see the
+shape of the workflow.)*
+
 ## 7. The mental model
 
 - **Two stages.** `detect` (expensive, parallel, per-frame) records *everything*
@@ -162,5 +180,6 @@ uv run grain-morph report out/grains tests/fixtures/real out/report --config tut
 - Every metric's formula + provenance: [`morphometrics.md`](morphometrics.md)
 - QC flags and tuning: [`qc.md`](qc.md) and the
   [README QC section](../README.md#how-the-qc-gate-works-and-how-to-tune-it)
+- Hand-labeling to validate the gate: [`groundtruth.md`](groundtruth.md)
 - Known limitations & open work: [`followups.md`](followups.md)
 - Contributing code: [`../CONTRIBUTING.md`](../CONTRIBUTING.md)
