@@ -1,6 +1,6 @@
 # Handoff — state of grain-morph
 
-Last updated: 2026-08-08. This is the rolling baton-pass: what's done, what's
+Last updated: 2026-08-14. This is the rolling baton-pass: what's done, what's
 open, and where to look. Deep detail on the open QC/perf items lives in
 [`followups.md`](followups.md); this doc orients you and prioritizes.
 
@@ -8,16 +8,49 @@ open, and where to look. Deep detail on the open QC/perf items lives in
 
 `main` is the single active branch and is fully pushed to
 `github.com/latenooker/grain-morph`. The pipeline runs end-to-end
-(detect → aggregate → report/overlay), tested (95 passing, 1 realdata skip),
-ruff + mypy clean.
+(detect → aggregate → report/overlay), now with a **`groundtruth` labeling GUI**;
+tested (**137 passing, 1 realdata skip**), ruff + mypy clean.
+
+Commands: `detect`, `aggregate`, `report`, `overlay`, `groundtruth`,
+`make-fixtures`. **Output defaults to CSV** as of 2026-08-13 (parquet/feather
+opt-in for lossless round-trips + hive partitioning). `detect` takes
+`--sample-id` / `--camera` identity overrides for single-sample directories.
+Install is `uv` / **conda (`environment.yml`)** / `pip`.
 
 **Calibration is still a placeholder** (`basic 20 / zoom 8 µm/px` in test runs);
 real µm/px is a device optical spec not yet available. So **every `*_um`
 column/percentile in existing outputs is placeholder-scaled — not physical.** All
 pixel-native, ratio, and shape metrics, and the entire QC gate, are
-calibration-independent and valid. This is what Feature 3 (below) addresses.
+calibration-independent and valid. This is what Feature 3 (below) addresses —
+and it's now higher-friction: `detect` **fails loudly** on uncalibrated cameras
+(by design), so every run currently needs a placeholder-µm override YAML.
 
-## Done this session (2026-08-06 → 08, all merged to `main`)
+## Done 2026-08-11 → 13 (all merged to `main`)
+
+- **Groundtruthing GUI** (`grain-morph groundtruth`) — PR #5 (`a7d801f`). Labels a
+  Latin-hypercube sample (over the continuous QC-driving metrics: `ecd_px`,
+  `edge_width_px`, `contrast`, `qc_aspect_ratio`, `qc_solidity`) of a `detect`
+  run; one grain at a time, zoom + toggleable mask, keystroke class into a
+  resumable `groundtruth.csv` keyed by `grain_uid`. New `src/grain_morph/
+  groundtruth.py`, `groundtruth` config section, `docs/groundtruth.md`, spec in
+  `docs/superpowers/specs/`. Shared grain/contour readers moved `cli` → `io`
+  (`read_grains`/`read_contours`). **This is the tool for the QC/hand-label work
+  behind open items 1–3.**
+- **Interactive-backend auto-select** (`137ba5b`, `22dbff7`, `e94c21c`) —
+  `overlay.py`/`report.py` no longer force `Agg` at import; `groundtruth`
+  auto-selects `macosx`/`QtAgg`/`TkAgg` (explicit `MPLBACKEND` respected; headless
+  still fails fast).
+- **CSV is the default output format** — PR #6 (`5c3c7ef`). Parquet/feather
+  opt-in for lossless round-trips + hive partitioning (parquet-only).
+- **`detect --sample-id` / `--camera` identity overrides** — PR #3. For
+  single-sample directories whose filenames don't encode (or shouldn't dictate)
+  identity; override-first/regex-second, new `filename.blank_regex` for the
+  structureless path.
+- **Miniconda install** (`environment.yml`, runtime + editable) — PR #2.
+- **Machine fix (not repo):** root-owned `~/.matplotlib` removed so matplotlib
+  stops warning on every import.
+
+## Done earlier session (2026-08-06 → 08, all merged to `main`)
 
 - **Per-frame summary table** (`aggregate` → `per_frame`) and **`detect
   --overview`** — the original Feature 1 & 2. Merged via PR #1 (commit `92408bc`).
@@ -79,9 +112,13 @@ Both Feret diameters are custom-but-consistent on the subpixel hull; min could
 use the library's min-rotated-rectangle short side (same geometry). Max has no
 clean library swap — leave it. See `morphometrics.md` known-issues.
 
-### 6. Feature 3 — make calibration optional (omit µm until confirmed)  *(schema change; original pending feature)*
-The only unshipped item from the original handoff. Detailed spec preserved below
-because it lives nowhere else.
+### 6. Feature 3 — make calibration optional (omit µm until confirmed)  *(schema change; now higher-friction)*
+The only unshipped item from the original handoff, and now the most-hit rough
+edge: because µm/px is still unavailable, **every** `detect` run currently needs a
+placeholder-µm override YAML just to get past the fail-loud calibration check
+(hit again on 2026-08-13). Making calibration optional (px-native columns, `_um`
+omitted, no abort) removes that friction without shipping fake sizes. Detailed
+spec preserved below because it lives nowhere else.
 
 ---
 
@@ -141,7 +178,14 @@ when `_um` absent.
   standard formulas + a short list of bespoke metrics. Keep it that way.
 - **Identity is in the filename, never the folder** — inputs aren't reliably
   foldered per sample; `filename.sample_regex` is the single source of identity
-  truth (now run-aware). See `followups.md` §"Deployment".
+  truth (now run-aware). For single-sample directories that don't encode identity,
+  `detect --sample-id/--camera` override it (override-first, regex-second; a
+  structureless-filename blank is caught by `filename.blank_regex`). See
+  `followups.md` §"Deployment".
+- **Groundtruthing the QC gate:** `grain-morph groundtruth OUT` hand-labels a
+  Latin-hypercube sample of grains → `groundtruth.csv` (keyed by `grain_uid`),
+  which joins back to `grains` to score predicted vs hand-labeled. This is how to
+  gather the evidence for open items 1–3. See `docs/groundtruth.md`.
 - **Out of scope but noted:** mineral discrimination (quartz/feldspar/mica) — mica
   is shape-tractable, quartz/feldspar isn't by silhouette; `wadell_sphericity` is
   bimodal (a real platy population, confounded with fiber debris). `followups.md`.
